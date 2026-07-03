@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>收攏式字典 · 管線主控台</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1d212c;--line:#272b38;--txt:#e6e8ee;--mut:#8b90a0;
+        --green:#2ecc71;--yellow:#f1c40f;--red:#e74c3c;--grey:#5a6072;--blue:#4aa3ff;--purple:#a974e8;}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 system-ui,"Noto Sans TC",sans-serif;background:var(--bg);color:var(--txt)}
+  header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:20}
+  header h1{font-size:16px;margin:0;white-space:nowrap}
+  .navlink{padding:3px 10px;border:1px solid #2d8cf0;border-radius:6px;color:#2d8cf0;font-size:13px;text-decoration:none;white-space:nowrap}
+  .legend{font-size:12px;color:var(--mut);display:flex;gap:12px;flex-wrap:wrap}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
+  .badges{display:flex;gap:8px;margin-left:auto;font-size:12px;flex-wrap:wrap}
+  .badge{padding:3px 8px;border-radius:10px;background:#222634;color:var(--mut)}
+  .badge.ok{color:#0c0;background:#10331c}.badge.no{color:#f66;background:#33161a}
+  main{padding:16px 20px;max-width:1240px;margin:0 auto}
+  .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  select,input,textarea,button{font:inherit;color:var(--txt);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+  button{cursor:pointer;background:#222634}button:hover{border-color:var(--blue)}
+  .dw{display:inline-flex;gap:6px}.dw select{padding:7px 6px;min-width:64px}
+  button.primary{background:#16365e;border-color:var(--blue)}
+  button.warn{background:#3a2412;border-color:#b5651d}
+  button.sm{padding:4px 9px;font-size:12px}
+  button:disabled{opacity:.4;cursor:default}
+  input[type=number]{width:88px}
+
+  /* 收攏管線軌道 */
+  .rail{display:flex;gap:0;overflow-x:auto;margin-bottom:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  .stn{flex:1 0 auto;min-width:104px;padding:10px 12px;text-align:center;cursor:pointer;border-right:1px solid var(--line);position:relative;white-space:nowrap}
+  .stn:last-child{border-right:none}
+  .stn:hover{background:#1d212c}
+  .stn.on{background:#16365e;color:#fff}
+  .stn .c{font-size:11px;margin-left:5px;color:var(--blue)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .panel h2{font-size:15px;margin:0 0 4px}.panel h3{font-size:13px;margin:16px 0 6px;color:var(--mut)}
+  .hint{font-size:12px;color:var(--mut);margin:0 0 12px}
+  .fl{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+  .fld label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
+  textarea{width:100%;height:120px;font-family:ui-monospace,monospace;font-size:12px}
+  .raw{background:#0d0f15;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;color:var(--mut);max-height:160px;overflow:auto;white-space:pre-wrap}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+  .chunk{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .chunk .ch{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mut);margin-bottom:6px;flex-wrap:wrap}
+  .chunk .ctext{font-size:12px;color:var(--txt);max-height:90px;overflow:auto;white-space:pre-wrap;border-left:3px solid var(--line);padding-left:8px}
+  .ovl{color:var(--mut);background:rgba(240,150,45,.12);border-radius:3px;padding:0 1px}
+  .rv{font-size:11px;padding:1px 7px;border-radius:7px}
+  .rv.正確{background:#10331c;color:var(--green)}.rv.存疑{background:#3a3413;color:var(--yellow)}.rv.錯字{background:#33161a;color:var(--red)}
+  .rv.none{background:#222634;color:var(--mut)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .anchor{font-size:11px;padding:2px 8px;border-radius:8px;background:#222634;border:1px solid var(--line)}
+  .anchor.mind{border-left:3px solid var(--green)}.anchor.wiki{border-left:3px solid var(--purple)}
+  .sc{color:var(--mut);font-size:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .muted{color:var(--mut)}.hide{display:none}
+  .stat{display:inline-flex;gap:14px;font-size:12px;color:var(--mut);margin-left:8px}
+  .stat b{color:var(--txt)}
+
+  /* 抽屜 */
+  #ov{position:fixed;inset:0;background:#0008;z-index:40;display:none}#ov.open{display:block}
+  #drawer{position:fixed;top:0;right:0;height:100%;width:420px;max-width:92vw;background:var(--panel2);border-left:1px solid var(--line);z-index:50;transform:translateX(100%);transition:transform .16s;overflow-y:auto;padding:18px 18px 40px}
+  #drawer.open{transform:translateX(0)}#drawer h3{margin:0 0 2px;font-size:18px;color:var(--txt)}
+  #drawer .x{position:absolute;top:14px;right:16px;font-size:18px;background:none;border:none;color:var(--mut)}
+  .dfld{margin:13px 0}.dfld label{display:block;font-size:12px;color:var(--mut);margin-bottom:5px}
+  .dfld input,.dfld select,.dfld textarea{width:100%}.drow{display:flex;gap:8px}.drow>*{flex:1}
+  .ev{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px}.ev .k{color:var(--mut)}.ok{color:var(--green)}.bad{color:var(--red)}
+  #confirmOv{position:fixed;inset:0;background:#000a;z-index:70;display:none;align-items:center;justify-content:center}
+  #confirmOv.open{display:flex}
+  #confirmBox{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:22px;width:420px;max-width:92vw}
+  #confirmBox h3{margin:0 0 10px;font-size:17px}#cfBody{font-size:13px;line-height:1.7}#cfBody b{color:var(--txt)}
+  .cfbtns{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+  #busy{position:fixed;inset:0;background:#0009;z-index:90;display:none;align-items:center;justify-content:center}
+  #busy.open{display:flex}
+  .busybox{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:24px 30px;text-align:center;min-width:220px}
+  .spinner{width:38px;height:38px;border:4px solid #2a2f3d;border-top-color:var(--blue);border-radius:50%;margin:0 auto 12px;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #busyLabel{font-size:14px}#busyTime{font-size:12px;margin-top:4px}
+  #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center}
+  .tmsg{background:#1d212c;border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:8px;padding:9px 14px;font-size:13px}
+  .tmsg.ok{border-left-color:var(--green)}.tmsg.err{border-left-color:var(--red)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛠 收攏式字典 · 管線主控台</h1>
+  <a href="/graph.html" class="navlink">🧠 心智圖</a>
+  <a href="/cag.html" class="navlink">🏷️ CAG 變體</a>
+  <span class="legend">
+    <span><i class="dot" style="background:var(--green)"></i>修</span>
+    <span><i class="dot" style="background:var(--yellow)"></i>待人工</span>
+    <span><i class="dot" style="background:var(--grey)"></i>維持</span>
+  </span>
+  <div class="badges" id="badges"></div>
+</header>
+<main>
+  <div class="bar">
+    <label>批次</label>
+    <select id="batchSel" onchange="selectBatch(this.value)"></select>
+    <button class="sm" onclick="newBatch()">＋ 新批次</button>
+    <button class="sm warn" onclick="delBatch()">🗑 刪除批次</button>
+  </div>
+  <div class="rail" id="rail"></div>
+  <div id="panel"></div>
+</main>
+
+<div id="ov" onclick="closeDrawer()"></div>
+<aside id="drawer"></aside>
+<div id="confirmOv"><div id="confirmBox">
+  <h3 id="cfTitle">確認</h3><div id="cfBody" class="muted"></div>
+  <div class="cfbtns"><button onclick="cfCancel()">取消</button><button class="warn" id="cfOk">確認</button></div>
+</div></div>
+<div id="toast"></div>
+<div id="busy"><div class="busybox"><div class="spinner"></div><div id="busyLabel">處理中…</div><div id="busyTime" class="muted"></div></div></div>
+
+<script>
+const $=s=>document.querySelector(s);
+let CUR=null,BATCH=null,SPANS=[],ACTIVE='s0',OPEN=null,MC=400;
+// 收攏管線：① 匯入 ② 切分 ③ 局部語意語音命中(規則證據) ④ gemma判斷(四態) ⑤ 人工修正(收第④態) ⑥ 回灌/匯出；⚙ 參數(唯讀)
+const STN=[['s0','① 匯入'],['s1','② 切分'],['s2','③ 局部語意語音命中'],['s3','④ gemma判斷'],['s4','⑤ 人工修正'],['s5','⑥ 回灌/匯出'],['sp','⚙ 參數']];
+
+function toast(m,k=""){const e=document.createElement("div");e.className="tmsg "+k;e.textContent=m;$("#toast").appendChild(e);setTimeout(()=>e.remove(),2800);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+async function api(p,m="GET",b){const o={method:m,headers:{"content-type":"application/json"}};if(b!==undefined)o.body=JSON.stringify(b);const r=await fetch(p,o);if(!r.ok)throw new Error(p+" → "+r.status+" "+await r.text());return r.status===204?null:r.json();}
+let _busyT=null,_busyN=0;
+function busyShow(label){_busyN++;$("#busyLabel").textContent=label||"處理中…";const t0=Date.now();$("#busyTime").textContent="0.0s";$("#busy").classList.add("open");clearInterval(_busyT);_busyT=setInterval(()=>{$("#busyTime").textContent=((Date.now()-t0)/1000).toFixed(1)+"s";},100);}
+function busyHide(){_busyN=Math.max(0,_busyN-1);if(_busyN===0){clearInterval(_busyT);$("#busy").classList.remove("open");}}
+async function call(fn,ok,label){busyShow(label||"處理中…");try{const r=await fn();if(ok)toast(ok,"ok");return r;}catch(e){toast(String(e.message||e).slice(0,150),"err");throw e;}finally{busyHide();}}
+
+async function health(){try{const h=await api("/health");const s=h.services||{};$("#badges").innerHTML=[["api",h.api],["gemma(窗口)",s.llm],["embed",s.embed],["ner",s.ner]].map(([k,v])=>`<span class="badge ${v?'ok':'no'}">${k} ${v?'✓':'✗'}</span>`).join("");}catch(e){$("#badges").innerHTML='<span class="badge no">api ✗</span>';}}
+async function loadBatches(){const {batches}=await api("/api/batches");$("#batchSel").innerHTML=(batches.map(b=>`<option ${b===CUR?'selected':''}>${b}</option>`).join(""))||'<option value="">（無批次）</option>';if(!CUR&&batches.length)CUR=batches[0];if(CUR)await selectBatch(CUR);else{BATCH=null;SPANS=[];renderAll();}}
+async function selectBatch(b){CUR=b;if(!b){BATCH=null;SPANS=[];return renderAll();}BATCH=await api(`/api/batches/${b}`);SPANS=await api(`/api/batches/${b}/spans`);renderAll();}
+async function reload(){if(!CUR)return;BATCH=await api(`/api/batches/${CUR}`);SPANS=await api(`/api/batches/${CUR}/spans`);renderAll();if(OPEN)renderSpanDrawer();}
+function setStation(id){ACTIVE=id;renderAll();}
+
+function counts(){const segs=BATCH?.segments||[];return {chunks:segs.length,spans:SPANS.length,
+  hits:SPANS.filter(s=>s.rule_hit).length,
+  fix:SPANS.filter(s=>s.decision?.to==='auto'&&s.review==='錯字').length,
+  keep:SPANS.filter(s=>s.review==='正確').length,
+  manual:SPANS.filter(s=>s.decision?.to==='human').length};}
+function rank(s){return (s.decision?.to==='auto'&&s.review==='錯字')?3:s.decision?.to==='human'?2:s.review==='正確'?0:1;}
+function renderRail(){const c=counts();$("#rail").innerHTML=STN.map(([id,n])=>{
+  let v='';if(id==='s1'&&c.chunks)v=c.chunks;if(id==='s2'&&c.hits)v=c.hits;if(id==='s3'&&c.fix)v=c.fix+'改';if(id==='s4'&&c.manual)v=c.manual;
+  return `<div class="stn ${ACTIVE===id?'on':''}" onclick="setStation('${id}')">${esc(n)}${v?`<span class="c">${v}</span>`:''}</div>`;}).join("");}
+function renderAll(){renderRail();renderPanel();}
+function renderPanel(){if(ACTIVE==='sp'){$("#panel").innerHTML=pParams();if(!PP)loadParams();return;}
+  if(ACTIVE==='s5'){$("#panel").innerHTML=pSync();return;}
+  if(!CUR){$("#panel").innerHTML='<div class="panel"><p class="muted">先「＋ 新批次」再匯入逐字稿。</p></div>';return;}
+  $("#panel").innerHTML=({s0:p0,s1:p1,s2:pLocate,s3:pJudge,s4:pManual}[ACTIVE]||p0)();}
+
+/* ⑥ 回灌 / 匯出（commit 併字典 → sync 三套輸出視覺化） */
+let SYNCD=null;
+function pSync(){const c=CUR?counts():{fix:0};
+  const rows=(list,color)=>list.map(r=>`<tr><td><b>${esc(r.pattern)}</b></td><td class="muted">→</td><td><b style="color:${color}">${esc(r.replace)}</b></td><td class="muted" style="font-size:11px">${esc(r.term_id||'')}</td></tr>`).join('');
+  const syncHtml=SYNCD?`
+   <h3>② regex（安全子集，下游可盲替換）　<span class="stat"><b>${(SYNCD.regex||[]).length}</b> 條</span></h3>
+   <table><thead><tr><th>錯字 pattern</th><th></th><th>正解 replace</th><th>term</th></tr></thead><tbody>${rows(SYNCD.regex||[],'var(--green)')||'<tr><td colspan="4" class="muted">（無）</td></tr>'}</tbody></table>
+   <h3>⚠ contextual（通用詞/字典詞變體，下游<b>不得盲替換</b>）　<span class="stat"><b>${(SYNCD.contextual||[]).length}</b> 條</span></h3>
+   <table><thead><tr><th>pattern</th><th></th><th>replace</th><th>term</th></tr></thead><tbody>${rows(SYNCD.contextual||[],'var(--yellow)')||'<tr><td colspan="4" class="muted">（無——高頻詞守門正常）</td></tr>'}</tbody></table>
+   <h3>①③ 其他兩套</h3>
+   <div class="ev">IPA(g2pW)：<b>${esc(SYNCD.ipa?.status||'—')}</b> <span class="muted">${esc(SYNCD.ipa?.note||'')}</span><br>
+   TTS(CosyVoice)：<b>${esc(SYNCD.tts?.status||'—')}</b> <span class="muted">${esc(SYNCD.tts?.note||'')}</span><br>
+   字典總詞數：<b>${SYNCD.terms_total??'—'}</b> ·
+   落檔：<code style="font-size:12px">${esc(SYNCD.file||'（未落檔）')}</code> <span class="muted">${esc(SYNCD.generated_at||'')}</span></div>`
+   :'<p class="muted">按「重生輸出」載入三套資料列表。</p>';
+  return `<div class="panel">
+  <h2>⑥ 回灌 / 匯出</h2>
+  <p class="hint"><b>commit</b>＝把本批 auto 修正併入字典（守門：通用詞不進 variants、confidence 以 distinct 批次計）。
+  <b>sync</b>＝字典重生三套系統：② regex 立即可用、① IPA / ③ TTS 容器待納入。</p>
+  <div class="fl">
+    <button class="primary" onclick="doCommit()" ${CUR&&c.fix?'':'disabled'}>📥 commit 本批（${c.fix||0} 個 auto 修）</button>
+    <button class="primary" onclick="doSync()">🔁 sync 重生輸出（三套）</button>
+  </div>
+  ${syncHtml}</div>`;}
+async function doCommit(){const r=await call(()=>api(`/api/batches/${CUR}/commit`,"POST"),null,"併入字典中…");toast(`✅ 併入 ${r.merged} 筆，字典共 ${r.terms_total} 詞`,"ok");await doSync();}
+async function doSync(){SYNCD=await call(()=>api("/api/dictionary/sync","POST"),null,"重生三套輸出中…");toast(`✅ regex ${SYNCD.regex?.length||0} 條 · contextual ${SYNCD.contextual?.length||0} 條`,"ok");renderAll();}
+
+/* ⚙ 參數（唯讀視覺化：實際生效值 settings.* + 每階段公式 + 現場索引統計） */
+let PP=null;
+async function loadParams(){try{PP=await api("/api/pipeline/params");}catch(e){PP={error:String(e.message||e)};}if(ACTIVE==='sp')renderAll();}
+function pParams(){if(!PP)return '<div class="panel"><p class="muted">載入參數中…</p></div>';
+  if(PP.error)return `<div class="panel"><p class="muted">讀取失敗：${esc(PP.error)}</p></div>`;
+  const live=PP.live||{},ph=live.phonetic||{},kn=live.know||{};
+  const stat=`<div class="fl" style="gap:8px;margin-bottom:12px">
+    <span class="badge">聲學靶 <b>${ph.ipa_terms??'—'}</b>（CAG ${ph.cag_terms??'—'}）</span>
+    <span class="badge">必收變體 <b>${ph.variants??'—'}</b></span>
+    <span class="badge" style="color:var(--yellow)">ambiguous 變體 <b>${ph.ambiguous??'—'}</b></span>
+    <span class="badge">心智圖卡 <b>${kn.terms??'—'}</b>（已嵌入 ${kn.embedded??'—'}）</span>
+    <span class="badge">IPA 引擎 ${ph.enabled?'<span class="ok">✓</span>':'<span class="bad">✗ 降級</span>'}</span></div>`;
+  const cards=(PP.stages||[]).map(st=>`<div class="chunk" style="margin-bottom:12px">
+    <div style="font-weight:700;margin-bottom:4px">${esc(st.name)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(st.desc)}</div>
+    <table style="margin-bottom:8px"><thead><tr><th style="width:32%">參數（env）</th><th style="width:14%">生效值</th><th>說明</th></tr></thead>
+    <tbody>${(st.params||[]).map(p=>`<tr><td><code style="font-size:12px">${esc(p.env)}</code></td><td><b style="color:var(--blue)">${esc(String(p.value))}</b></td><td class="muted" style="font-size:12px">${esc(p.desc)}</td></tr>`).join('')}</tbody></table>
+    ${(st.formulas||[]).length?`<div class="ev" style="font-family:ui-monospace,monospace;font-size:11.5px;line-height:1.8">${st.formulas.map(f=>'· '+esc(f)).join('<br>')}</div>`:''}
+  </div>`).join('');
+  return `<div class="panel"><h2>⚙ 管線參數（唯讀）</h2>
+   <p class="hint">${esc(PP.note||'')}　值＝引擎<b>實讀</b>的 settings.*（非帳面）。</p>
+   ${stat}${cards}</div>`;}
+
+/* ① 匯入 */
+function p0(){const m=BATCH.meta||{},raw=(BATCH.raw||{}).text||'';return `<div class="panel">
+  <h2>① 逐字稿匯入</h2>
+  <p class="hint">匯入 STT/TTT 逐字稿（僅 .txt/.srt）。保留 v0 原稿、自動帶出日期/來源。乾淨文件（簡報/書稿/對照表）走知識庫，不在此。</p>
+  <div class="fl"><div class="fld"><label>選擇逐字稿檔（.txt / .srt）</label><input type="file" id="f" accept=".txt,.srt"/></div>
+    <button onclick="doUpload()">上傳並匯入</button></div>
+  <div class="fld"><label>或貼上逐字稿內容</label><textarea id="paste">${esc(raw)}</textarea></div>
+  <button class="primary" onclick="doIngest()">匯入</button>
+  <h3>智慧整理（自動帶出，可調）</h3>
+  <div class="fl">
+    <div class="fld"><label>會議日期</label>${dateWheel('meeting',m.meeting_date)}</div>
+    <div class="fld"><label>產出日期</label>${dateWheel('produced',m.produced_date)}</div>
+    <div class="fld"><label>來源／出處</label><input id="m_origin" value="${esc(m.origin||'')}" placeholder="場次名稱／單位"/></div>
+    <button class="sm" onclick="saveMeta()">儲存</button>
+  </div>
+  <h3>目前原稿（${raw.length} 字 · ${esc((BATCH.raw||{}).filename||'—')}）</h3>
+  <div class="raw">${esc(raw)||'（尚未匯入）'}</div></div>`;}
+function dateWheel(id,value){const v=/^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(value||'')||[];const yNow=new Date().getFullYear();
+  const opt=(n,sel,pad)=>`<option value="${n}" ${String(n)===String(sel)?'selected':''}>${pad?String(n).padStart(2,'0'):n}</option>`;
+  let ys='<option value="">年</option>',ms='<option value="">月</option>',ds='<option value="">日</option>';
+  for(let y=yNow+1;y>=yNow-12;y--)ys+=opt(y,v[1]);for(let mo=1;mo<=12;mo++)ms+=opt(mo,v[2]&&+v[2],true);for(let d=1;d<=31;d++)ds+=opt(d,v[3]&&+v[3],true);
+  return `<span class="dw"><select id="${id}_y">${ys}</select><select id="${id}_m">${ms}</select><select id="${id}_d">${ds}</select></span>`;}
+function readDate(id){const y=$(`#${id}_y`).value,mo=$(`#${id}_m`).value,d=$(`#${id}_d`).value;return (y&&mo&&d)?`${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`:'';}
+
+/* ② 切分 */
+function p1(){const segs=BATCH.segments||[];return `<div class="panel">
+  <h2>② 切分　<span class="stat"><b>${segs.length}</b> chunk</span></h2>
+  <p class="hint">bge 把切點對齊主題轉折、core 連續覆蓋不重疊（缺服務則規則切）。<span class="ovl">重疊上下文</span>僅供檢視邊界、不進下游。重切會清空既有 span。</p>
+  <div class="fl"><button class="primary" onclick="doSegment()">✂ 智慧切塊</button>
+    <details><summary class="muted" style="cursor:pointer;font-size:12px">參數</summary>
+      <div class="fld" style="margin-top:6px"><label>chunk 上限（字）</label><input type="number" id="mc" value="${MC}"/></div></details></div>
+  <div class="grid">${segs.map(s=>`<div class="chunk" style="cursor:pointer" onclick="openChunk('${s.seg_id}')">
+     <div class="ch">${s.seg_id} · #${s.idx} · core ${s.raw_text.length}字 · [${s.start}–${s.end}]</div>
+     <div class="ctext">${s.ctx_before?`<span class="ovl">…${esc(s.ctx_before)}</span>`:''}<span>${esc(s.core_text||s.raw_text)||'（空）'}</span>${s.ctx_after?`<span class="ovl">${esc(s.ctx_after)}…</span>`:''}</div>
+    </div>`).join("")||'<p class="muted">先匯入再切分。</p>'}</div></div>`;}
+
+/* 兩軸並行判讀：IPA命中(音) × 語意撐(意) → 四象限 */
+function ipaHit(s){return (s.reports?.acoustic||[]).length>0;}
+function semHit(s){return (s.reports?.semantic||[]).some(x=>x.score>0);}
+function quad(s){const i=ipaHit(s),m=semHit(s);return i&&m?1:i&&!m?2:!i&&m?3:4;}
+const QMETA={1:['①修','音近＋語意撐','var(--green)'],2:['②維持','聲學假陽性（音近但語意不撐）','var(--muted)'],
+  3:['③人工','生詞（NER/語意有訊號、IPA沒中）','var(--yellow)'],4:['④無訊','音意皆無','#555']};
+function qbadge(q){const[n,,col]=QMETA[q];return `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;border:1px solid ${col};color:${col}">${n}</span>`;}
+
+/* ③ 局部語意語音命中（偵測 + 聲學 + 局部語意，不改字） */
+function pLocate(){const c=counts();const list=[...SPANS].sort((a,b)=>quad(a)-quad(b));
+  const qc={1:0,2:0,3:0,4:0};SPANS.forEach(s=>qc[quad(s)]++);
+  const cell=(q)=>{const[n,d,col]=QMETA[q];return `<div style="flex:1;border:1px solid ${col};border-radius:6px;padding:8px 10px;background:rgba(255,255,255,.02)">
+    <div style="font-size:18px;font-weight:700;color:${col}">${qc[q]}</div><div style="font-weight:600;color:${col}">${n}</div><div class="muted" style="font-size:11px">${d}</div></div>`;};
+  return `<div class="panel">
+  <h2>③ 局部語意語音命中　<span class="stat">偵測 <b>${c.spans}</b> · ①修候選 <b style="color:var(--green)">${qc[1]}</b></span></h2>
+  <p class="hint">兩軸<b>並行</b>判讀：<b>IPA命中</b>(音，CAG音近召回) × <b>語意撐</b>(意，候選 vs 局部句排名制)。語意只對音召回的候選表態、不自己生字。不改字，交 ④ gemma 拍板。</p>
+  <div style="margin:8px 0">
+    <div style="display:flex;gap:6px;margin-bottom:4px"><div style="flex:0 0 70px"></div><div style="flex:1;text-align:center;font-size:12px" class="muted">語意撐 ✓</div><div style="flex:1;text-align:center;font-size:12px" class="muted">語意未撐 ✗</div></div>
+    <div style="display:flex;gap:6px;align-items:stretch;margin-bottom:6px"><div style="flex:0 0 70px;display:flex;align-items:center;font-size:12px" class="muted">IPA命中 ✓</div>${cell(1)}${cell(2)}</div>
+    <div style="display:flex;gap:6px;align-items:stretch"><div style="flex:0 0 70px;display:flex;align-items:center;font-size:12px" class="muted">IPA沒中 ✗</div>${cell(3)}${cell(4)}</div>
+  </div>
+  <div class="fl"><button class="primary" onclick="doLocate()" ${c.chunks?'':'disabled'}>🎯 跑偵測 + 局部語意語音</button></div>
+  <table><thead><tr><th>象限</th><th>原詞</th><th>聲學候選（音軸）</th><th>局部語意（意軸）</th><th>chunk</th></tr></thead>
+  <tbody>${list.map(s=>{const h=s.history||[],orig=h.length?h[0].value:'';const ac=s.reports?.acoustic||[],se=s.reports?.semantic||[];
+    const acT=ac.map(x=>`${esc(x.candidate)} <span class="muted">${esc(x.evidence)}</span>`).join('、')||'<span class="muted">—</span>';
+    const seT=se.length?se.map(x=>{const ok=x.score>0;return `<b style="color:${ok?'var(--green)':'#666'}">${esc(x.candidate)}</b> <span class="muted">${esc(x.evidence||(''+x.score))}</span>`;}).join('、'):'<span class="muted">未命中</span>';
+    return `<tr onclick="openSpan('${s.span_id}')" style="cursor:pointer"><td>${qbadge(quad(s))}</td><td><b>${esc(orig)}</b></td><td style="font-size:12px">${acT}</td><td style="font-size:12px">${seT}</td><td class="muted" style="font-size:11px">${esc(s.seg_id||'')}</td></tr>`;
+  }).join("")||'<tr><td colspan="5" class="muted">先切分再跑偵測。</td></tr>'}</tbody></table></div>`;}
+
+/* span 表（gemma判斷用） */
+function srow(s){const h=s.history||[];const orig=h.length?h[0].value:'';const cur=h.length?h[h.length-1].value:'';
+  const fin=(s.decision&&s.decision.correct)||cur;
+  const tag=(s.decision?.to==='auto'&&s.review==='錯字')?'<span class="rv 錯字">修✓</span>':s.decision?.to==='human'?'<span class="rv 存疑" style="background:#2a2410;color:var(--yellow)">待人工</span>':s.review==='正確'?'<span class="rv 正確">維持</span>':'<span class="rv 存疑">未判</span>';
+  const changed=(s.decision?.to==='auto'&&s.review==='錯字')||s.decision?.to==='human';
+  const arrow=changed?`${esc(orig)} <span class="muted">→</span> <b>${esc(fin)}</b>`:`<b>${esc(orig)}</b>`;
+  return `<tr onclick="openSpan('${s.span_id}')" style="cursor:pointer"><td>${arrow}</td><td class="muted" style="font-size:11px">${esc((s.context||'').replace(/[\[\]]/g,'').slice(0,40))}</td><td>${tag}</td><td class="muted" style="font-size:11px">${esc(s.seg_id||'')}</td></tr>`;}
+
+/* ④ gemma判斷（四態：修 / 維持 / 待人工） */
+function pJudge(){const c=counts();const list=[...SPANS].sort((a,b)=>rank(b)-rank(a));return `<div class="panel">
+  <h2>④ gemma判斷　<span class="stat">修 <b style="color:var(--green)">${c.fix}</b> · 維持 <b class="muted">${c.keep}</b> · 待人工 <b style="color:var(--yellow)">${c.manual}</b></span></h2>
+  <p class="hint">吃規則證據(聲學+局部語意命中)＋平行多語 → gemma 判 拋棄?/跨語命中?。四態：命中+不拋棄=<b style="color:var(--green)">修</b>；命中+拋棄/不命中+拋棄=維持；不命中+不拋棄(跨語救回)=<b style="color:var(--yellow)">待人工</b>。需先 ③。<br>
+  Gemma 不常駐：按下按鈕由主機代理開<b>獨佔窗口</b>（收GPU→載Gemma→判<b>所有批次</b>存疑→換回收斂棧，載入 ~數分）。</p>
+  <div class="fl"><button class="primary" onclick="doJudgeOps()" id="judgeBtn" ${c.spans?'':'disabled'}>🤖 判官出動（Gemma 獨佔窗口）</button>
+    <button class="sm" onclick="doJudge()" title="不開窗口、直接打判官 API：僅在 Gemma 窗口已開著（或除錯）時可用，平時 LLM 不常駐會失敗">本批直判（窗口開著才可用）</button>
+    <span class="muted" style="font-size:12px">${c.hits||c.spans?'':'⚠ 先跑 ③ 產生候選'}</span></div>
+  <div id="opsWrap" style="display:none;margin:6px 0 10px">
+    <div style="height:7px;background:#1d2330;border-radius:4px;overflow:hidden">
+      <div id="opsBar" style="height:7px;width:0;background:#2d8cf0;border-radius:4px;transition:width .6s"></div></div>
+    <div id="opsPhase" class="muted" style="font-size:12px;margin-top:3px"></div>
+  </div>
+  <table><thead><tr><th>原詞 → 結果</th><th>上下文</th><th>狀態</th><th>chunk</th></tr></thead>
+  <tbody>${list.map(srow).join("")||'<tr><td colspan="4" class="muted">先跑 ③ 再跑 gemma判斷。</td></tr>'}</tbody></table></div>`;}
+
+/* ⑤ 人工修正（只收 gemma 判第④態：規則沒撐、跨語救回） */
+function pManual(){const c=counts();const list=SPANS.filter(s=>s.decision?.to==='human');return `<div class="panel">
+  <h2>⑤ 人工修正　<span class="stat">待人工 <b style="color:var(--yellow)">${c.manual}</b></span></h2>
+  <p class="hint">gemma 判為第④態（規則沒撐、靠跨語救回）的詞，<b>不自動改</b>。逐一檢視上下文與建議候選，人工拍板（點開抽屜改字）。</p>
+  <table><thead><tr><th>原詞 → 建議</th><th>上下文</th><th>chunk</th></tr></thead>
+  <tbody>${list.map(s=>{const h=s.history||[],orig=h.length?h[0].value:'';const sug=s.decision?.correct||'';
+    return `<tr onclick="openSpan('${s.span_id}')" style="cursor:pointer;background:#2a2410"><td>${esc(orig)} <span class="muted">→</span> <b style="color:var(--yellow)">${esc(sug)}</b></td><td class="muted" style="font-size:12px">${esc((s.context||'').replace(/[\[\]]/g,'').slice(0,60))}</td><td class="muted" style="font-size:11px">${esc(s.seg_id||'')}</td></tr>`;
+  }).join("")||'<tr><td colspan="3" class="muted">無待人工項目（gemma 已自動處理完，或尚未跑 ④）。</td></tr>'}</tbody></table></div>`;}
+
+/* ── 動作 ── */
+async function newBatch(){const id=prompt("batch_id：","evt_"+Date.now().toString().slice(-6));if(!id)return;await call(()=>api("/api/batches","POST",{batch_id:id,domain:""}),"已建立批次");CUR=id;ACTIVE='s0';await loadBatches();}
+let _cfFn=null;
+function confirmDialog(t,b,ok,fn){$("#cfTitle").textContent=t;$("#cfBody").innerHTML=b;$("#cfOk").textContent=ok||"確認";_cfFn=fn;$("#confirmOv").classList.add("open");}
+function cfCancel(){$("#confirmOv").classList.remove("open");_cfFn=null;}
+async function cfConfirm(){const fn=_cfFn;cfCancel();if(fn)await fn();}
+async function delBatch(){if(!CUR)return toast("沒有選定批次","err");
+  confirmDialog("刪除批次？",`永久刪除 <b>${esc(CUR)}</b>？無法復原。`,"確認刪除",
+    async()=>{await call(()=>api(`/api/batches/${CUR}`,"DELETE"),"已刪除 "+CUR);CUR=null;ACTIVE='s0';await loadBatches();});}
+async function doUpload(){const f=$("#f").files[0];if(!f)return toast("先選檔","err");const fd=new FormData();fd.append("file",f);await call(async()=>{const r=await fetch(`/api/batches/${CUR}/upload`,{method:"POST",body:fd});if(!r.ok)throw new Error(await r.text());return r.json();},"已上傳並匯入","上傳解析中…");await reload();}
+async function doIngest(){const t=$("#paste").value.trim();if(!t)return toast("貼上逐字稿","err");await call(()=>api(`/api/batches/${CUR}/ingest`,"POST",{text:t}),"已匯入");await reload();}
+async function saveMeta(){await call(()=>api(`/api/batches/${CUR}/meta`,"PATCH",{meeting_date:readDate('meeting'),produced_date:readDate('produced'),origin:$("#m_origin").value.trim()}),"已存");await reload();}
+async function doSegment(){const el=$("#mc");const mc=(el&&parseInt(el.value))||MC||400;MC=mc;await call(()=>api(`/api/batches/${CUR}/segment?max_chars=${mc}`,"POST"),"已切分","智慧切塊中…");ACTIVE='s2';await reload();}
+async function doLocate(){const r=await call(()=>api(`/api/batches/${CUR}/ground_context`,"POST"),null,"偵測 + 局部語意語音中…");toast(`偵測 ${r.spans} · 規則命中 ${r.rule_hits}`,"ok");ACTIVE='s2';await reload();}
+async function doJudge(){const r=await call(()=>api(`/api/batches/${CUR}/coarse_fix`,"POST"),null,"gemma 判斷中…");toast(`修 ${r.fix} · 維持 ${r.keep} · 待人工 ${r.manual}`,"ok");ACTIVE='s3';await reload();}
+async function doJudgeOps(){const b=$("#judgeBtn");if(b)b.disabled=true;
+  try{const r=await fetch("/api/ops/judge",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});
+    if(!r.ok){toast(await r.text(),"err");if(b)b.disabled=false;return;}
+    const w=$("#opsWrap");if(w)w.style.display="block";
+    toast("已排入 Gemma 獨佔窗口（載入 ~數分，請留在此頁）","ok");
+    let last="";
+    while(true){await new Promise(s=>setTimeout(s,3000));
+      let st;try{st=await fetch("/api/ops/status").then(r=>r.json());}catch(e){continue;}
+      const line=`[${st.step??0}/${st.steps??5}] ${st.phase||"等待代理認領…"}`;
+      const bar=$("#opsBar"),ph=$("#opsPhase");
+      if(bar)bar.style.width=Math.round(100*(st.step??0)/(st.steps||5))+"%";
+      if(ph&&line!==last){ph.textContent=line;last=line;}
+      if(st.state==="done"){toast("✅ 判官批次完成","ok");break;}
+      if(st.state==="error"){if(bar)bar.style.background="#e74c3c";toast("❌ 判官失敗（詳 data/ops/agent.log）","err");break;}}
+  }catch(e){toast(String(e).slice(0,120),"err");}
+  if(b)b.disabled=false;await reload();}
+
+/* ── chunk 抽屜 ── */
+function openChunk(seg_id){const seg=(BATCH.segments||[]).find(s=>s.seg_id===seg_id);if(!seg)return;
+  const sps=SPANS.filter(s=>s.seg_id===seg_id);const langs=seg.langs||{};const par=Object.entries(langs).filter(([k])=>k!=='cmn');
+  const gc=seg.ground_context||[],gcM=gc.filter(g=>g.source==='mind'),gcW=gc.filter(g=>g.source==='wiki');
+  const gcHtml=gc.length?`<div class="dfld"><label>語境錨點（接地·不改字：🧠心智圖 ${gcM.length} · 📖wiki ${gcW.length}）</label><div class="ev">`+
+    gcM.map(g=>`<div>🧠 <b>${esc(g.term)}</b>${g.gloss?' <span class="muted">'+esc(g.gloss)+'</span>':''}${g.category?' <span class="muted">['+esc(g.category)+']</span>':''}${g.is_special?' <span style="color:var(--green)">⭐CAG</span>':''} <span class="muted">${g.score}</span></div>`).join('')+
+    gcW.map(g=>`<div>📖 <b>${esc(g.title)}</b>${(g.aliases&&g.aliases.length)?' <span class="muted">('+g.aliases.map(esc).join('、')+')</span>':''} <span class="muted">←${esc(g.via)} · ${g.score}</span></div>`).join('')+
+    `</div></div>`:'';
+  $("#drawer").innerHTML=`<button class="x" onclick="closeDrawer()">✕</button>
+   <h3>${seg.seg_id} · #${seg.idx}</h3>
+   <div class="muted" style="font-size:12px">${seg.raw_text.length} 字 · ${sps.length} span</div>
+   <div class="dfld"><label>全文（core，含標點）</label><div class="ev" style="white-space:pre-wrap">${esc(seg.core_text||seg.raw_text)||'（空）'}</div></div>
+   ${gcHtml}
+   ${par.length?`<div class="dfld"><label>平行多語</label><div class="ev" style="white-space:pre-wrap">${par.map(([k,v])=>esc(k+': '+v)).join('\n')}</div></div>`:''}
+   ${sps.length?`<div class="dfld"><label>此塊 span</label><table>${sps.map(srow).join("")}</table></div>`:''}`;
+  OPEN=null;$("#drawer").classList.add("open");$("#ov").classList.add("open");}
+
+/* ── span 抽屜（看詳情 + 人工改字/屬性）── */
+function findSpan(id){return SPANS.find(s=>s.span_id===id);}
+function openSpan(id){OPEN=id;renderSpanDrawer();$("#drawer").classList.add("open");$("#ov").classList.add("open");}
+function closeDrawer(){OPEN=null;$("#drawer").classList.remove("open");$("#ov").classList.remove("open");}
+function renderSpanDrawer(){const s=findSpan(OPEN);if(!s){closeDrawer();return;}const h=s.history||[];const orig=h.length?h[0].value:'';const cur=h.length?h[h.length-1].value:'';const fin=(s.decision&&s.decision.correct)||cur;
+  const tag=(s.decision?.to==='auto'&&s.review==='錯字')?'修✓（規則命中+gemma確認）':s.decision?.to==='human'?'待人工（規則沒撐、跨語救回）':s.review==='正確'?'維持原樣':'未判（待 gemma）';
+  const histRows=h.map(x=>`<div><span class="k">${x.by==='human'?'✎人工':'model·'+x.iter}</span>　${esc(x.value)}</div>`).join("")||'—';
+  const ac=s.reports?.acoustic||[],se=s.reports?.semantic||[];
+  const acT=ac.map(x=>`${esc(x.candidate)} <span class="muted">${esc(x.evidence)}</span>`).join('、')||'—';
+  const seT=se.length?se.map(x=>`<b style="color:var(--green)">${esc(x.candidate)}</b> <span class="muted">${esc(x.evidence||(''+x.score))}</span>`).join('、'):'<span class="muted">未命中</span>';
+  $("#drawer").innerHTML=`<button class="x" onclick="closeDrawer()">✕</button>
+   <h3>${esc(orig)} <span class="muted">→</span> ${esc(fin)}</h3>
+   <div class="muted" style="font-size:12px">${s.span_id} · ${s.seg_id||'—'} · ${esc(tag)}</div>
+   <div class="dfld"><label>上下文</label><div class="ev">${esc(s.context||'—')}</div></div>
+   <div class="dfld"><label>聲學（IPA→CAG 音近）</label><div class="ev">${acT}</div></div>
+   <div class="dfld"><label>局部語意（排名制命中）　規則命中：${s.rule_hit?'<b style="color:var(--green)">是</b>':'否'}</label><div class="ev">${seT}</div></div>
+   <div class="dfld"><label>變化歷史（model·iter；✎=人工）</label><div class="ev">${histRows}</div></div>
+   <div class="dfld"><label>人工改字（覆寫，by=human）</label><div class="drow"><input id="dEdit" value="${esc(fin)}"/><button class="sm primary" style="flex:0 0 auto" onclick="doEdit()">送出</button></div></div>
+   <div class="dfld"><label>屬性</label><button class="sm" onclick="doToggleProper()">切換為「${s.is_proper_noun?'常用詞':'專名'}」</button></div>`;}
+async function doEdit(){const v=$("#dEdit").value.trim();if(!v)return;await call(()=>api(`/api/batches/${CUR}/spans/${OPEN}`,"PATCH",{value:v,decision_to:'auto',correct:v}),"已改字");await reload();}
+async function doToggleProper(){const s=findSpan(OPEN);await call(()=>api(`/api/batches/${CUR}/spans/${OPEN}`,"PATCH",{is_proper_noun:!s.is_proper_noun}),"已切換");await reload();}
+
+$("#cfOk").addEventListener("click",cfConfirm);
+$("#confirmOv").addEventListener("click",e=>{if(e.target.id==="confirmOv")cfCancel();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeDrawer();cfCancel();}});
+health();loadBatches();setInterval(health,15000);
+</script>
+</body>
+</html>

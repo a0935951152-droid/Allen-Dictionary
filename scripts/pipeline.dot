@@ -1,0 +1,99 @@
+digraph pipeline {
+  graph [rankdir=TB, fontname="Noto Sans CJK TC", bgcolor="#fbfbfb", compound=true,
+         labelloc=t, fontsize=22, nodesep=0.35, ranksep=0.55,
+         label="收斂式字典 — 管線與技術棧結構圖（檔案 → 過程 → 分析 → 產出）"];
+  node  [fontname="Noto Sans CJK TC", fontsize=11, style="filled,rounded", shape=box, penwidth=1.1];
+  edge  [fontname="Noto Sans CJK TC", fontsize=9, color="#666666", arrowsize=0.8];
+
+  // 形狀/顏色語意
+  // 檔案/原料=folder黃 · 過程模組=box藍 · 模型服務=box3d綠 · 落地產出=cylinder灰
+
+  /* ===== 純淨側：知識庫建置（答案來源） ===== */
+  subgraph cluster_know {
+    label="① 純淨側 · 知識庫建置（dic build）"; style="filled,rounded"; fillcolor="#eef7ff"; color="#9cc3e8"; fontsize=14;
+    f_src   [shape=folder, fillcolor="#fff3cd", label="sources/\n.docx .pptx .xlsx .pdf\n（authored 乾淨源）"];
+    p_know  [fillcolor="#cfe3ff", label="knowledge.py\n兩階段抽取\nPass1 心智圖→Pass2 CAG"];
+    m_7b1   [shape=box3d, fillcolor="#d6f5d6", label="vLLM\nBreeze-7B"];
+    d_vault [shape=cylinder, fillcolor="#e8e8e8", label="vault 心智圖\n274 md（term/gloss/關係/ipa）"];
+    d_cag   [shape=cylinder, fillcolor="#e8e8e8", label="CAG 230\nacoustic.json（正解+變體）"];
+    f_src -> p_know; m_7b1 -> p_know [style=dashed,label="判官"]; p_know -> d_vault; p_know -> d_cag;
+  }
+
+  /* ===== wiki 大庫建置 ===== */
+  subgraph cluster_wiki {
+    label="② wiki 大庫建置（dic wiki，離線一次性）"; style="filled,rounded"; fillcolor="#f3eefe"; color="#c3a9e8"; fontsize=14;
+    f_dump  [shape=folder, fillcolor="#fff3cd", label="zhwiki dump\npage/redirect/titles .gz"];
+    p_ing   [fillcolor="#e3d4fb", label="wiki_ingest\n解析 SQL + OpenCC 轉繁"];
+    d_ent   [shape=cylinder, fillcolor="#e8e8e8", label="entries.jsonl\n~1.5M（title+aliases）"];
+    p_widx  [fillcolor="#e3d4fb", label="wiki_index\nbge 嵌入 → hnswlib"];
+    m_bge1  [shape=box3d, fillcolor="#d6f5d6", label="TEI\nbge-m3"];
+    d_hnsw  [shape=cylinder, fillcolor="#e8e8e8", label="hnswlib 索引\nhnsw.bin / ids.jsonl"];
+    f_dump -> p_ing -> d_ent -> p_widx -> d_hnsw; m_bge1 -> p_widx [style=dashed];
+  }
+
+  /* ===== 心智圖嵌入（接地橋） ===== */
+  subgraph cluster_mind {
+    label="③ 心智圖嵌入（dic mind，接地橋）"; style="filled,rounded"; fillcolor="#eafaf0"; color="#9ad8b4"; fontsize=14;
+    p_mind  [fillcolor="#cdeede", label="know_index\n實體嵌入（增量 hash）"];
+    d_cards [shape=cylinder, fillcolor="#e8e8e8", label="cards.json\n心智圖向量"];
+    p_mind -> d_cards;
+  }
+  d_vault -> p_mind [lhead=cluster_mind];
+
+  /* ===== 糾正側管線（主軸） ===== */
+  subgraph cluster_pipe {
+    label="④ 糾正側管線 · retrieval-then-correct（先接地、再由粗到細修）"; style="filled,rounded"; fillcolor="#fff6ee"; color="#f0b97d"; fontsize=15;
+
+    f_raw   [shape=folder, fillcolor="#fff3cd", label="逐字稿 .txt/.srt\n→ batch.raw（v0）"];
+    p_seg   [fillcolor="#ffe0c2", label="切分 chunk.py\nbge 主題邊界 / core 連續不重疊"];
+    d_segs  [shape=cylinder, fillcolor="#e8e8e8", label="segments[]\ncore chunk（收斂單位）"];
+
+    p_grd   [fillcolor="#ffd9b0", label="接地 ground_context（不改字）\nchunk→相關心智圖實體→以實體 query 查 wiki"];
+    d_gc    [shape=cylinder, fillcolor="#e8e8e8", label="seg.ground_context\n語境錨點（mind + grounded wiki）"];
+
+    p_det   [fillcolor="#ffe0c2", label="偵測 review\n變體掃描 + NER + IPA 召回"];
+    m_ner   [shape=box3d, fillcolor="#d6f5d6", label="ckip NER\n(可錯定位器)"];
+    m_ipa   [shape=box3d, fillcolor="#d6f5d6", label="IPA 規則\nword_distance 逐字"];
+    d_spans [shape=cylinder, fillcolor="#e8e8e8", label="spans\n原詞→候選正解（存疑）"];
+
+    p_coa   [fillcolor="#ffd0a0", label="粗修 coarse\n候選∈語境錨點？高信心→直接改"];
+    p_ref   [fillcolor="#ffd0a0", label="精修 refine\n7B 原詞 vs 建議（選/棄權 RPM）"];
+    m_7b2   [shape=box3d, fillcolor="#d6f5d6", label="vLLM\nBreeze-7B"];
+    p_conv  [fillcolor="#ffe0c2", label="收斂 converge\nN/M/K 穩定/搖擺"];
+    p_rt    [shape=diamond, fillcolor="#ffe8d0", label="分流 route"];
+
+    d_dict  [shape=cylinder, fillcolor="#d6f5d6", label="dictionary.json\n（只併 verified）"];
+
+    f_raw -> p_seg -> d_segs;
+    d_segs -> p_grd -> d_gc;
+    d_segs -> p_det -> d_spans;
+    m_ner -> p_det [style=dashed]; m_ipa -> p_det [style=dashed];
+    d_spans -> p_coa; d_gc -> p_coa [label="錨點"];
+    p_coa -> p_ref [label="存疑（粗修未解）"];
+    m_7b2 -> p_ref [style=dashed]; d_gc -> p_ref [style=dashed,label="上下文"];
+    p_coa -> p_conv [label="已改"]; p_ref -> p_conv;
+    p_conv -> p_rt;
+    p_rt -> d_dict [label="auto/verified"];
+    p_rt -> p_rt [label="regex / human", color="#bbbbbb"];
+  }
+
+  /* ===== 跨側資料流（橋 / 候選 / 回灌） ===== */
+  d_cards -> p_grd [style=dashed, color="#39a35a", constraint=false, label="心智圖橋(餘弦≥0.35)"];
+  d_hnsw  -> p_grd [style=dashed, color="#8a5ad8", constraint=false, label="wiki(hnswlib≥0.55)"];
+  d_cag   -> p_det [style=dashed, color="#2d8cf0", constraint=false, label="CAG 聲學靶\nIPA≤0.28 / 真同音≈0"];
+  d_cag   -> p_coa [style=dashed, color="#2d8cf0", constraint=false];
+  d_dict  -> d_cag [style=dashed, color="#e07b39", constraint=false, label="閉環回灌\n(verified→聲學種子)"];
+
+  /* ===== 技術棧 ===== */
+  subgraph cluster_stack {
+    label="技術棧（封閉 / 離線：模型掛 models-net internal，無對外路由）"; style="filled,rounded"; fillcolor="#f0f0f0"; color="#bbbbbb"; fontsize=13;
+    s1 [shape=note, fillcolor=white, label="FastAPI + docker compose"];
+    s2 [shape=note, fillcolor=white, label="vLLM · Breeze-7B W4A16"];
+    s3 [shape=note, fillcolor=white, label="TEI · bge-m3 / bge-reranker"];
+    s4 [shape=note, fillcolor=white, label="ckip NER（CPU）"];
+    s5 [shape=note, fillcolor=white, label="hnswlib（1.5M 近鄰）"];
+    s6 [shape=note, fillcolor=white, label="IPA 規則 word_distance（MISA 天條）"];
+    s7 [shape=note, fillcolor=white, label="OpenCC / jieba / pypinyin"];
+    s1 -> s2 -> s3 -> s4 -> s5 -> s6 -> s7 [style=invis];
+  }
+}

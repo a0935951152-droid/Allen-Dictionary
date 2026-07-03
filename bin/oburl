@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# 顯示知識庫心智圖 / 主控台的本機網址（SSH 進來時用 LAN IP 開瀏覽器）。
+# 自動挑 LAN IP（192.168/10/172.16-31 私網），濾掉 docker 橋接與 loopback。
+PORT="${PORT:-8080}"
+
+# 收集非 loopback IPv4
+mapfile -t ips < <(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' )
+
+lan=""
+for ip in "${ips[@]}"; do
+  case "$ip" in
+    172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) continue ;;   # docker 橋接，略過
+    192.168.*|10.*) lan="$ip"; break ;;                   # 典型家用/企業 LAN
+  esac
+done
+[ -z "$lan" ] && lan="${ips[0]:-localhost}"               # 退而求其次
+
+echo "知識庫服務網址（port $PORT）："
+echo "  🧠 心智圖： http://$lan:$PORT/graph.html"
+echo "  🎛  主控台： http://$lan:$PORT/"
+echo
+echo "其他偵測到的位址："
+for ip in "${ips[@]}"; do
+  [ "$ip" = "$lan" ] && continue
+  echo "    http://$ip:$PORT/graph.html"
+done
+echo "  本機/SSH 轉發： http://localhost:$PORT/graph.html"
+echo "  （SSH 轉發：ssh -L $PORT:localhost:$PORT <user>@$lan）"

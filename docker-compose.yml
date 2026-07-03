@@ -1,0 +1,230 @@
+# ── 收斂式字典 — 封閉建構 (sealed / offline) ──────────────────────
+# 模型服務全離線：模型只從本地路徑載入，且掛在 internal 網路（無對外路由）→
+# 不可能下載、不可能外洩（呼應 §8 隱私：wiki/上下文偏置一律離線）。
+# 只有 api 對 host 公開；可選 cloudflared 臨時通道對外（走 api，不碰模型網）。
+
+x-offline-env: &offline-env
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+
+x-gpu: &gpu-reservation
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  # ── ⚠ 已淘汰（2026-07-03）：Breeze-7B 不再常駐——判官全走 vllm-build(Gemma) 獨佔窗口 ──
+  #    dic up 不啟動此服務；定義保留僅供回退。models-net alias `vllm` 由 vllm-build 頂替。
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: dict-vllm
+    <<: *gpu-reservation
+    networks: [models-net]
+    environment:
+      <<: *offline-env
+      HF_HOME: /models/hf-cache
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+    volumes:
+      - ${MODELS_ROOT}:/models:ro
+    command: >
+      --model /models/${JUDGE_MODEL_DIR}
+      --served-model-name judge
+      --quantization ${VLLM_QUANT}
+      --gpu-memory-utilization ${VLLM_GPU_FRACTION}
+      --max-model-len ${VLLM_MAX_MODEL_LEN}
+      --max-num-seqs ${VLLM_MAX_NUM_SEQS}
+    healthcheck:
+      # vllm/vllm-openai 映像無 `python`（只有 python3）；用 curl 與 TEI 健檢一致，避免假性 unhealthy
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s
+    ipc: host
+    restart: unless-stopped
+
+  # ── build 判官（知識側一次性 build；序列化、吃滿卡）— Gemma 4 31B AWQ + Marlin turbo ──
+  # profile build：平時不起。`dic build` 停掉 vllm(7B)+TEI 後才起這個（GPU 互斥）。
+  # network alias `vllm` → api 連 vllm:8000 透明（served-name 都 judge）。
+  vllm-build:
+    image: vllm/vllm-openai:latest
+    container_name: dict-vllm-build
+    profiles: ["build"]
+    <<: *gpu-reservation
+    networks:
+      models-net:
+        aliases: [vllm]            # 接管 vllm:8000（runtime vllm 停時）→ api 透明
+    environment:
+      <<: *offline-env
+      HF_HOME: /models/hf-cache
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+    volumes:
+      - ${MODELS_ROOT}:/models:ro
+    command: >
+      --model /models/${BUILD_MODEL_DIR}
+      --served-model-name judge
+      --quantization ${BUILD_QUANT}
+      --gpu-memory-utilization ${BUILD_GPU_FRACTION}
+      --max-model-len ${BUILD_MAX_MODEL_LEN}
+      --max-num-seqs ${BUILD_MAX_NUM_SEQS}
+      --cpu-offload-gb ${BUILD_CPU_OFFLOAD_GB}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 420s
+    ipc: host
+    restart: "no"
+
+  # ── 嵌入（§3 收斂相似度 / RRF 語意分支）— bge-m3 via TEI ───────────
+  tei-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.8
+    container_name: dict-tei-embed
+    <<: *gpu-reservation
+    networks: [models-net]
+    environment:
+      <<: *offline-env
+    # max-client-batch-size 256：bulk 嵌入（wiki 大庫 1.5M 條）提吞吐，預設 32 太小
+    command: ["--model-id", "${EMBED_MODEL_PATH}", "--port", "80",
+              "--max-client-batch-size", "256", "--max-batch-tokens", "32768"]
+    volumes:
+      - ${MODELS_ROOT}/tei-cache:/data
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    restart: unless-stopped
+
+  # ── ⚠ 已淘汰（2026-07-03）：引擎已無 rerank 呼叫（NMK 移除後死服務）——dic up 不啟動 ──
+  tei-rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.8
+    container_name: dict-tei-rerank
+    <<: *gpu-reservation
+    networks: [models-net]
+    environment:
+      <<: *offline-env
+    command: ["--model-id", "${RERANK_MODEL_PATH}", "--port", "80"]
+    volumes:
+      - ${MODELS_ROOT}/tei-cache:/data
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:80/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    restart: unless-stopped
+
+  # ── NER 篩選（§3 便宜濾網「本地 Chinese NER」）— ckip，CPU ──────────
+  ner:
+    build:
+      context: ./services/ner
+    container_name: dict-ner
+    networks: [models-net]
+    environment:
+      <<: *offline-env
+      NER_MODEL_PATH: ${NER_MODEL_PATH}
+    volumes:
+      - ${MODELS_ROOT}:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  sat:
+    build:
+      context: ./services/sat
+    container_name: dict-sat
+    networks: [models-net]
+    environment:
+      <<: *offline-env
+      SAT_MODEL_PATH: ${SAT_MODEL_PATH}
+    volumes:
+      - ${MODELS_ROOT}:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
+    restart: unless-stopped
+
+  # ── 節點 / 收斂 / 分流 / 字典 API（§6）— FastAPI ──────────────────
+  api:
+    build:
+      context: ./services/api
+    container_name: dict-api
+    networks: [models-net, edge]      # models-net 連模型；edge 對 host/通道公開
+    environment:
+      LLM_BASE_URL: http://vllm:8000/v1
+      LLM_MODEL: judge
+      EMBED_URL: http://tei-embed:80
+      RERANK_URL: http://tei-rerank:80
+      NER_URL: http://ner:80
+      SAT_URL: http://sat:80
+      DATA_DIR: /data
+      CONVERGE_N: ${CONVERGE_N}
+      CONVERGE_M: ${CONVERGE_M}
+      CONVERGE_K: ${CONVERGE_K}
+      RRF_K: ${RRF_K}
+      GROUNDING_THRESHOLD: ${GROUNDING_THRESHOLD}
+      # ── 判定側管線參數（config.py ②③組；前端 ⚙參數 站可視覺化檢視）──
+      COMMON_FPM: ${COMMON_FPM:-10}                   # 通用詞門檻（每百萬詞次數；A1/A3/A5 守門）
+      IPA_FUZZY: ${IPA_FUZZY:-0.28}                   # CAG 音近召回上限
+      IPA_EXACT: ${IPA_EXACT:-0.0}                    # 字典/refterms 真同音門檻
+      IPA_SUB_CONFUSE: ${IPA_SUB_CONFUSE:-0.34}       # 混淆類音素替換代價
+      IPA_SUB_TONE: ${IPA_SUB_TONE:-0.30}             # 聲調 token 代價（A2）
+      LOCAL_FLOOR: ${LOCAL_FLOOR:-0.35}               # 局部語意命中門檻
+      WIKI_FLOOR: ${WIKI_FLOOR:-0.55}                 # 語意錨點 wiki 橋接下限
+      LOCAL_TOPK: ${LOCAL_TOPK:-5}                    # 局部語意排名取前 k
+      JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-4}      # gemma 判官併發
+    volumes:
+      - ./data:/data
+    ports:
+      - "${API_PORT}:8080"
+    depends_on:
+      vllm:
+        condition: service_started
+      tei-embed:
+        condition: service_started
+      tei-rerank:
+        condition: service_started
+      ner:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Cloudflare 臨時通道（profile: tunnel）─────────────────────────
+  # 點擊存取/上傳資料都走 api(後端)。預設不啟動；`make tunnel` 才起。
+  # 無 token → TryCloudflare 快速通道（隨機網址）；有 token → named tunnel(自己網域)。
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: dict-cloudflared
+    profiles: ["tunnel"]
+    networks: [edge]
+    command: >
+      tunnel --no-autoupdate
+      ${CLOUDFLARE_TUNNEL_TOKEN:+run --token ${CLOUDFLARE_TUNNEL_TOKEN}}
+      ${CLOUDFLARE_TUNNEL_TOKEN:---url http://api:8080}
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  models-net:
+    name: dict-models-net
+    internal: true        # 無 gateway → 模型服務無法連外網（封閉保證）
+  edge:
+    name: dict-edge

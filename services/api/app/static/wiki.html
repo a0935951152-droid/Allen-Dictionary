@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>wiki 接地圖 · 心智圖 → wiki 大庫</title>
+<style>
+  :root{--line:#e3e3e3;--muted:#888}
+  *{box-sizing:border-box}
+  html,body{max-width:100%;overflow-x:hidden}
+  body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
+    font:14px/1.5 system-ui,"PingFang TC","Microsoft JhengHei",sans-serif;color:#222}
+  header{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:7px 12px;
+    border-bottom:1px solid var(--line);background:#fafafa}
+  header h1{font-size:15px;margin:0 6px 0 0;white-space:nowrap}
+  header label{font-size:12px;color:var(--muted);white-space:nowrap}
+  input{font:inherit;padding:2px 5px;border:1px solid var(--line);border-radius:6px}
+  input[type=range]{padding:0;width:80px;vertical-align:middle}
+  #wrap{flex:1;min-height:0;display:flex;position:relative}
+  #cv{flex:1;display:block;width:100%;background:#fff;cursor:grab}
+  #cv:active{cursor:grabbing}
+  #side{position:absolute;top:0;right:0;height:100%;width:300px;max-width:78vw;
+    border-left:1px solid var(--line);padding:16px 18px 16px;overflow:auto;background:#fff;
+    box-shadow:-4px 0 18px rgba(0,0,0,.10);display:none;z-index:6}
+  #side.show{display:block}
+  #side .sclose{position:absolute;top:8px;right:10px;font-size:20px;line-height:1;color:#999;
+    background:none;border:none;cursor:pointer;padding:0}
+  #side .sclose:hover{color:#333}
+  #side h2{font-size:17px;margin:0 24px 10px 0;word-break:break-all}
+  .kv{font-size:13.5px;margin:7px 0;line-height:1.6}.kv b{display:inline-block;min-width:64px;color:#555;font-weight:600}
+  .tag{display:inline-block;background:#eef;border-radius:10px;padding:2px 9px;margin:3px 3px 0 0;font-size:12.5px}
+  .var{background:#f1ecfb}
+  .sec{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+  .sec .h{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .wlink{display:block;font-size:13px;margin:5px 0}
+  #legendBox{position:absolute;left:12px;bottom:12px;background:rgba(255,255,255,.94);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;font-size:12px;color:#444;box-shadow:0 2px 10px rgba(0,0,0,.07);max-width:300px}
+  #legendBox .lg-title{font-weight:600;color:#333;margin-bottom:5px;font-size:11.5px}
+  #legendBox .lg-row{margin:3px 0;line-height:1.5}#legendBox .lg-row b{color:#222}
+  #legendBox .lg-hint{margin-top:6px;padding-top:5px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
+  .muted{color:var(--muted)}
+  a{color:#2d8cf0;text-decoration:none}
+  button{font:inherit;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+  button:hover{background:#f0f6ff;border-color:#2d8cf0}
+  button.primary{background:#2d8cf0;color:#fff;border-color:#2d8cf0}
+  .navlink{padding:3px 10px;border:1px solid #2d8cf0;border-radius:6px;color:#2d8cf0;font-size:13px;white-space:nowrap}
+  .navlink:hover{background:#f0f6ff}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔗 wiki 接地圖</h1>
+  <a href="/graph.html" class="navlink">← 回心智圖</a>
+  <span style="flex:1;min-width:8px"></span>
+  <label>搜尋 <input id="q" placeholder="詞..." size="16" style="min-width:140px"/></label>
+  <label>實體數 <input id="n" type="number" value="20" style="width:54px"/></label>
+  <label>相似度≥ <input type="range" id="floor" min="0" max="1" step="0.05" value="0.5"/> <span id="floorv">0.5</span></label>
+  <button class="primary" onclick="load()">套用</button>
+  <button id="followBtn" onclick="follow()" title="把心智圖 card 的新增／變動增量同步到 wiki 接地（知識庫重建或改詞後用）">🔄 跟隨心智圖</button>
+  <span id="stat" class="muted"></span>
+</header>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="legendBox">
+    <div class="lg-title">圖例 · 心智圖實體 → wiki 大庫</div>
+    <div class="lg-row"><i class="dot" style="background:#2d8cf0"></i><b>實體（CAG）</b>　已收錄 CAG 的心智圖詞</div>
+    <div class="lg-row"><i class="dot" style="background:#f0962d"></i><b>實體（純語意）</b>　僅心智圖、未進 CAG</div>
+    <div class="lg-row"><i class="dot" style="background:#7b3fe4"></i><b>wiki 條目</b>　用 card 語義檢索到的 grounded 條目</div>
+    <div class="lg-hint">用實體 card（term｜gloss｜names）檢索 · 滾輪縮放 · 拖背景平移 · 點節點看敘述</div>
+  </div>
+  <div id="side"></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let NODES=[],EDGES=[],ADJ={},cam={x:0,y:0,z:1},drag=null,sel=null,DATA=null;
+const cv=$("#cv"),ctx=cv.getContext("2d");
+function fit(){cv.width=cv.clientWidth*devicePixelRatio;cv.height=cv.clientHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);}
+addEventListener("resize",fit);fit();
+
+async function load(){
+  const n=+$("#n").value||20,floor=+$("#floor").value||0,q=$("#q").value.trim();
+  $("#stat").textContent="讀取…";
+  try{DATA=await fetch(`/api/wiki/mind_links?n=${n}&floor=${floor}&q=${encodeURIComponent(q)}`,{cache:"no-store"}).then(r=>r.json());}
+  catch(e){$("#stat").textContent="wiki 索引未就緒";return;}
+  render();
+}
+// 跟隨心智圖：把 card 的新增／變動增量同步到 wiki 接地（彈確認框才執行）
+async function follow(){
+  if(!confirm("跟隨心智圖：將心智圖 card 的新增／變動增量同步到 wiki 接地\n（重嵌變動的詞 + 用其 card 語義重查 wiki；知識庫剛重建或改過詞後用）。\n\n未變動的詞會沿用、不重算。確定執行？"))return;
+  const b=$("#followBtn");b.disabled=true;b.textContent="⏳ 同步中…";
+  try{const r=await fetch("/api/knowledge/embed_mind",{method:"POST"}).then(r=>r.json());
+    await load();                                  // 重載二部圖（讀更新後預存）
+    b.textContent=`✓ 重嵌 ${r.embedded||0}／wiki ${r.wiki_relinked||0}`;
+    setTimeout(()=>{b.disabled=false;b.textContent="🔄 跟隨心智圖";},2500);
+  }catch(e){b.disabled=false;b.textContent="❌ 失敗，重試";}
+}
+function render(){
+  const W=cv.clientWidth,H=cv.clientHeight;
+  const nodes=[],edges=[],seen={};
+  const entMap={};(DATA.entities||[]).forEach(e=>entMap[e.term]=e);
+  (DATA.entities||[]).forEach(e=>nodes.push({...e,id:e.term,kind:"term",label:e.term,
+    color:e.is_special?"#2d8cf0":"#f0962d"}));
+  let linkCount=0;
+  for(const term in (DATA.links||{})) for(const w of DATA.links[term]){
+    const wid="📖 "+w.title;
+    if(!(wid in seen)){seen[wid]=1;
+      nodes.push({id:wid,kind:"wiki",label:w.title,title:w.title,aliases:w.aliases||[],score:w.score,color:"#7b3fe4"});}
+    edges.push({from:term,to:wid});linkCount++;
+  }
+  const nEnt=(DATA.entities||[]).length,nWiki=nodes.filter(n=>n.kind==="wiki").length;
+  const orphan=(DATA.entities||[]).filter(e=>!(DATA.links[e.term]||[]).length).length;
+  $("#stat").textContent=`${nEnt} 實體 · ${nWiki} wiki 條 · ${linkCount} 聯繫`+(orphan?` · ${orphan} 個無對應`:"");
+  NODES=nodes.map((n,i)=>({...n,x:W/2+Math.cos(i)*Math.min(W,H)*0.32*Math.random()+(Math.random()-.5)*40,
+                              y:H/2+Math.sin(i)*Math.min(W,H)*0.32*Math.random()+(Math.random()-.5)*40,vx:0,vy:0,
+                              r:n.kind==="wiki"?4:6}));
+  const idx={};NODES.forEach((n,i)=>idx[n.id]=i);
+  EDGES=edges.filter(e=>e.from in idx&&e.to in idx).map(e=>({s:idx[e.from],t:idx[e.to]}));
+  ADJ={};EDGES.forEach(e=>{(ADJ[e.s]=ADJ[e.s]||[]).push(e.t);(ADJ[e.t]=ADJ[e.t]||[]).push(e.s);});
+  cam={x:0,y:0,z:1};sel=null;side();T=200;kick();
+}
+// ── 力導向（與心智圖同套顯示模式）──
+let T=200;
+function step(){
+  if(T<=0)return;T-=0.5;
+  const W=cv.clientWidth,H=cv.clientHeight,k=T/200;
+  for(let i=0;i<NODES.length;i++){const a=NODES[i];
+    for(let j=i+1;j<NODES.length;j++){const b=NODES[j];
+      let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1;if(d2>90000)continue;
+      const f=900/d2;a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;}
+    a.vx+=(W/2-a.x)*0.002;a.vy+=(H/2-a.y)*0.002;}
+  EDGES.forEach(e=>{const a=NODES[e.s],b=NODES[e.t];let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;
+    const f=(d-70)*0.01;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});
+  NODES.forEach(n=>{if(n===drag?.n)return;n.x+=n.vx*k;n.y+=n.vy*k;n.vx*=0.85;n.vy*=0.85;});
+}
+function draw(){
+  const W=cv.clientWidth,H=cv.clientHeight;ctx.clearRect(0,0,W,H);
+  ctx.save();ctx.translate(cam.x,cam.y);ctx.scale(cam.z,cam.z);
+  ctx.lineWidth=1/cam.z;
+  EDGES.forEach(e=>{const a=NODES[e.s],b=NODES[e.t];ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+    ctx.strokeStyle="#d9c8f5";ctx.stroke();});
+  const nb=sel!=null?new Set(ADJ[sel]||[]):null;
+  NODES.forEach((n,i)=>{
+    ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,7);
+    ctx.fillStyle=n.color;ctx.globalAlpha=(sel==null||i===sel||nb?.has(i))?1:0.25;ctx.fill();
+    if(i===sel){ctx.lineWidth=2/cam.z;ctx.strokeStyle="#111";ctx.stroke();}
+    const showLabel=n.kind==="term"||cam.z>0.75||i===sel;
+    if(showLabel){ctx.fillStyle=n.kind==="wiki"?"#6b3fb0":"#333";
+      ctx.font=`${n.kind==="term"?12:11}px sans-serif`;ctx.fillText(n.label||n.id,n.x+n.r+2,n.y+3);}
+    ctx.globalAlpha=1;});
+  ctx.restore();
+}
+let raf=null;
+function loop(){step();draw();if(T>0.01)raf=requestAnimationFrame(loop);else raf=null;}  // 靜止即停重繪，不燒 idle CPU
+function kick(){if(raf==null)raf=requestAnimationFrame(loop);}                            // 互動／載入時喚醒
+
+const SRC_LABEL={glossary:"對照表 gold",llm:"LLM 抽取",dict:"字典"};
+const TIER_LABEL={T1:"T1 對照表(含變體)",T1g:"T1 對照表",T2:"T2 特殊詞",T3:"T3 純語意(僅心智圖)"};
+const CLOSE_BTN='<button class="sclose" onclick="closeSide()" title="關閉">×</button>';
+function closeSide(){sel=null;$("#side").classList.remove("show");kick();}
+function wikiOf(term){return (DATA.links[term]||[]);}
+function entsOf(wid){const t=wid.replace(/^📖 /,"");const out=[];
+  for(const term in DATA.links) if(DATA.links[term].some(w=>w.title===t))out.push(term);return out;}
+function side(n){const s=$("#side");if(!n){s.classList.remove("show");return;}
+  s.classList.add("show");
+  if(n.kind==="wiki"){
+    const ents=entsOf(n.id);
+    s.innerHTML=CLOSE_BTN+`<h2>📖 ${esc(n.title)}</h2>
+      <div class="kv"><b>接地</b> 經心智圖實體 card 橋接（§4.1）· 相似度 ${(n.score||0).toFixed(2)}</div>
+      <div class="sec"><div class="h">別名 / redirect</div>
+        ${(n.aliases||[]).map(v=>`<span class="tag var">${esc(v)}</span>`).join("")||'<span class="muted">無</span>'}</div>
+      <div class="sec"><div class="h">被哪些心智圖實體連到</div>
+        ${ents.map(t=>`<span class="tag">${esc(t)}</span>`).join("")||'<span class="muted">—</span>'}</div>
+      <div class="sec"><a href="https://zh.wikipedia.org/wiki/${encodeURIComponent(n.title)}" target="_blank">前往維基百科 →</a></div>
+      <div class="sec"><div class="h muted">wiki 一律 candidate 只當語境，永不自動升 gold（治理鐵律）。</div></div>`;
+    return;}
+  // 實體節點
+  const names=n.names||{};const nameRows=Object.entries(names);const ws=wikiOf(n.id);
+  s.innerHTML=CLOSE_BTN+`<h2>${esc(n.id)}</h2>
+    ${n.gloss?`<div class="kv" style="color:#555;font-style:italic">「${esc(n.gloss)}」</div>`:''}
+    <div class="kv"><b>領域</b> ${esc(n.category)||'—'}</div>
+    <div class="kv"><b>來源</b> ${SRC_LABEL[n.source]||n.source||'—'} ${n.is_special?'· <span style="color:#39b54a">CAG 收錄</span>':''}</div>
+    <div class="kv"><b>tier</b> ${TIER_LABEL[n.tier]||n.tier||'—'}</div>
+    <div class="sec"><div class="h">多語固定譯法（names）</div>
+      ${nameRows.length?nameRows.map(([l,v])=>`<div class="kv"><b>${esc(l)}</b> ${esc(v)}</div>`).join("")
+        :'<span class="muted">尚無多語對照</span>'}</div>
+    <div class="sec"><div class="h">grounded 的 wiki 條目（用此 card 語義檢索）</div>
+      ${ws.length?ws.map(w=>`<a class="wlink" href="https://zh.wikipedia.org/wiki/${encodeURIComponent(w.title)}" target="_blank">
+         <b>${(w.score||0).toFixed(2)}</b> ${esc(w.title)}
+         ${(w.aliases||[]).length?`<span class="muted"> · ${esc((w.aliases||[]).slice(0,3).join("、"))}</span>`:''}</a>`).join("")
+        :'<span class="muted">無 wiki 對應（自創/縮寫詞）</span>'}</div>
+    <div class="sec"><a href="/graph.html?q=${encodeURIComponent(n.id)}">在心智圖看完整／校正 →</a></div>`;
+}
+// ── 互動（與心智圖同套）──
+function world(e){const r=cv.getBoundingClientRect();return {x:(e.clientX-r.left-cam.x)/cam.z,y:(e.clientY-r.top-cam.y)/cam.z};}
+function pick(e){const w=world(e);let best=null,bd=1e9;NODES.forEach((n,i)=>{const d=Math.hypot(n.x-w.x,n.y-w.y);if(d<n.r+4&&d<bd){bd=d;best=i;}});return best;}
+cv.addEventListener("mousedown",e=>{const i=pick(e);if(i!=null){drag={n:NODES[i],i};sel=i;side(NODES[i]);}else{closeSide();drag={pan:true,sx:e.clientX-cam.x,sy:e.clientY-cam.y};}kick();});
+addEventListener("mousemove",e=>{if(!drag)return;if(drag.pan){cam.x=e.clientX-drag.sx;cam.y=e.clientY-drag.sy;}else{const w=world(e);drag.n.x=w.x;drag.n.y=w.y;drag.n.vx=drag.n.vy=0;T=Math.max(T,40);}kick();});
+addEventListener("mouseup",()=>drag=null);
+cv.addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9;const r=cv.getBoundingClientRect();
+  const mx=e.clientX-r.left,my=e.clientY-r.top;cam.x=mx-(mx-cam.x)*f;cam.y=my-(my-cam.y)*f;cam.z*=f;kick();},{passive:false});
+addEventListener("keydown",e=>{if(e.key==="Escape")closeSide();});
+$("#q").addEventListener("keydown",e=>{if(e.key==="Enter")load();});
+$("#floor").addEventListener("input",e=>$("#floorv").textContent=e.target.value);  // 比照心智圖：拖動即時顯示值，套用才重載
+
+load();kick();
+</script>
+</body>
+</html>

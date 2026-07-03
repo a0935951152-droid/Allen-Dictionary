@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>知識庫心智圖 · Obsidian vault</title>
+<style>
+  :root{--line:#e3e3e3;--muted:#888}
+  *{box-sizing:border-box}
+  html,body{max-width:100%;overflow-x:hidden}
+  body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;
+    font:14px/1.5 system-ui,"PingFang TC","Microsoft JhengHei",sans-serif;color:#222}
+  header{flex:none;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:7px 12px;
+    border-bottom:1px solid var(--line);background:#fafafa}
+  header h1{font-size:15px;margin:0 6px 0 0;white-space:nowrap}
+  header label{font-size:12px;color:var(--muted);white-space:nowrap}
+  select,input{font:inherit;padding:2px 5px;border:1px solid var(--line);border-radius:6px}
+  select{max-width:130px}
+  input[type=range]{padding:0;width:80px;vertical-align:middle}
+  #wrap{flex:1;min-height:0;display:flex;position:relative}
+  #cv{flex:1;display:block;width:100%;background:#fff;cursor:grab}
+  #cv:active{cursor:grabbing}
+  /* 詳情面板＝浮動覆蓋層：畫布吃滿全寬，點節點才浮出（不永久佔顯示區） */
+  #side{position:absolute;top:0;right:0;height:100%;width:300px;max-width:78vw;
+    border-left:1px solid var(--line);padding:16px 18px 16px;overflow:auto;background:#fff;
+    box-shadow:-4px 0 18px rgba(0,0,0,.10);display:none;z-index:6}
+  #side.show{display:block}
+  #side .sclose{position:absolute;top:8px;right:10px;font-size:20px;line-height:1;color:#999;
+    background:none;border:none;cursor:pointer;padding:0}
+  #side .sclose:hover{color:#333}
+  #side h2{font-size:17px;margin:0 24px 10px 0;word-break:break-all}
+  .kv{font-size:13.5px;margin:7px 0;line-height:1.6}.kv b{display:inline-block;min-width:78px;color:#555;font-weight:600}
+  .tag{display:inline-block;background:#eef;border-radius:10px;padding:2px 9px;margin:3px 3px 0 0;font-size:12.5px}
+  .var{background:#fdecec}
+  .sec{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
+  .sec .h{font-size:12px;color:var(--muted);margin-bottom:4px}
+  /* ── 瀏覽窗內浮動圖例 ── */
+  #legendBox{position:absolute;left:12px;bottom:12px;background:rgba(255,255,255,.94);border:1px solid var(--line);
+    border-radius:8px;padding:9px 11px;font-size:12px;color:#444;box-shadow:0 2px 10px rgba(0,0,0,.07);max-width:300px}
+  #legendBox .lg-title{font-weight:600;color:#333;margin-bottom:5px;font-size:11.5px}
+  #legendBox .lg-row{margin:3px 0;line-height:1.5}#legendBox .lg-row b{color:#222}
+  #legendBox .lg-hint{margin-top:6px;padding-top:5px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
+  .muted{color:var(--muted)}
+  a{color:#2d8cf0;text-decoration:none}
+  button{font:inherit;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+  button:hover{background:#f0f6ff;border-color:#2d8cf0}
+  button.primary{background:#2d8cf0;color:#fff;border-color:#2d8cf0}
+  button.primary:hover{background:#1f7ae0}
+  .navlink{padding:3px 10px;border:1px solid #2d8cf0;border-radius:6px;color:#2d8cf0;font-size:13px;white-space:nowrap}
+  .navlink:hover{background:#f0f6ff}
+  /* ── 知識庫管理抽屜 ── */
+  #ov{position:fixed;inset:0;background:rgba(0,0,0,.28);display:none;z-index:9}
+  #panel{position:fixed;top:0;right:0;width:460px;max-width:94vw;height:100vh;background:#fff;
+    border-left:1px solid var(--line);box-shadow:-4px 0 24px rgba(0,0,0,.12);overflow:auto;z-index:10;
+    display:none;padding:16px}
+  #panel h2{font-size:16px;margin:2px 0 10px}
+  #panel h3{font-size:13px;margin:18px 0 6px;color:#555;border-bottom:1px solid var(--line);padding-bottom:4px}
+  .close{position:absolute;top:12px;right:14px;font-size:20px;color:#999;cursor:pointer;background:none;border:none}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .card{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center}
+  .card b{display:block;font-size:20px;color:#2d8cf0}.card span{font-size:11px;color:var(--muted)}
+  .bar{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:12px}
+  .bar .lbl{width:120px;text-align:right;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar .track{flex:1;background:#eef1f5;border-radius:4px;height:14px;position:relative}
+  .bar .fill{background:#2d8cf0;height:100%;border-radius:4px}
+  .bar .n{width:34px;color:#888}
+  .files{font-size:12.5px}
+  .file{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px}
+  .file:hover{background:#f5f7fa}
+  .file .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pill{font-size:11px;padding:1px 7px;border-radius:9px;white-space:nowrap}
+  .pill.new{background:#e7f5e9;color:#218838}.pill.changed{background:#fff3cd;color:#a07800}
+  .pill.extracted{background:#eef1f5;color:#888}.pill.skip{background:#fdecec;color:#c0392b}
+  /* ── 逐檔抽取/排除切換 ── */
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;flex:none}
+  .seg .sg{border:none;border-radius:0;padding:1px 8px;font-size:11px;background:#fff;color:#888;cursor:pointer}
+  .seg .sg+.sg{border-left:1px solid var(--line)}
+  .seg .sg.on-ext{background:#39b54a;color:#fff}.seg .sg.on-exc{background:#c0392b;color:#fff}
+  .seg .sg:disabled{color:#ccc;cursor:not-allowed;background:#fafafa}
+  .ovr{color:#2d8cf0;font-size:11px;cursor:pointer;margin-left:2px;white-space:nowrap}
+  .ovr:hover{text-decoration:underline}
+  .drop{border:2px dashed #cfd8e3;border-radius:8px;padding:14px;text-align:center;color:var(--muted);cursor:pointer}
+  .drop.hot{border-color:#2d8cf0;background:#f0f6ff;color:#2d8cf0}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+  details summary{cursor:pointer;color:#2d8cf0;font-size:12.5px;margin:6px 0}
+  .gop{font-size:12px;padding:3px 9px;margin:0 4px 4px 0;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+  .gop:hover{border-color:#2d8cf0}
+  .log{font:12px/1.5 ui-monospace,monospace;background:#1e1e1e;color:#d6d6d6;border-radius:6px;padding:8px;
+    max-height:160px;overflow:auto;white-space:pre-wrap;display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 知識庫心智圖</h1>
+  <a href="/wiki.html" class="navlink" title="心智圖實體 grounded 到 wiki 大庫的二部圖（獨立頁）">🔗 wiki 接地圖 →</a>
+  <a href="/" class="navlink">前往收斂管線 →</a>
+  <span style="flex:1;min-width:8px"></span>
+  <label>領域 <select id="cat"></select></label>
+  <label>來源 <select id="src">
+    <option value="">全部</option><option value="glossary">glossary(對照表)</option>
+    <option value="llm">llm</option></select></label>
+  <label>信心 <input type="range" id="conf" min="0" max="1" step="0.1" value="0"/> <span id="confv">0</span></label>
+  <label>搜尋 <input id="q" placeholder="詞..." size="16" style="min-width:140px"/></label>
+  <label>上限 <input id="lim" type="number" value="100" style="width:58px"/></label>
+  <button onclick="load()">套用</button>
+  <span id="stat" class="muted"></span>
+  <button onclick="openPanel()">知識庫管理</button>
+</header>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <!-- 瀏覽窗內浮動圖例：節點顏色＝詞的「來源」，黑點＝領域分類節點 -->
+  <div id="legendBox">
+    <div class="lg-title">圖例 · 節點顏色＝來源</div>
+    <div class="lg-row"><i class="dot" style="background:#2d8cf0"></i><b>對照表</b>　人工核可的錯字→正解 gold 詞（最可信）</div>
+    <div class="lg-row"><i class="dot" style="background:#39b54a"></i><b>LLM</b>　兩階段抽取自乾淨文件的詞</div>
+    <div class="lg-row"><i class="dot" style="background:#111"></i><b>領域</b>　8 類實體分類節點（詞連到所屬類）</div>
+    <div class="lg-hint">滾輪縮放 · 拖背景平移 · 拖節點移動 · 點節點看詳情</div>
+  </div>
+  <div id="side"></div>
+</div>
+
+<div id="ov" onclick="closePanel()"></div>
+<div id="panel">
+  <button class="close" onclick="closePanel()">×</button>
+  <h2>⚙️ 知識庫管理</h2>
+
+  <h3>📊 儀表板</h3>
+  <div class="cards" id="cards"></div>
+  <div id="byCat"></div>
+  <details><summary>tier / 來源分佈</summary><div id="byTier"></div><div id="bySrc"></div></details>
+  <div id="cagBox" class="muted" style="font-size:12px;margin-top:6px"></div>
+
+  <h3>⬆️ 上傳乾淨來源</h3>
+  <div class="drop" id="drop">拖檔到此，或<u>點擊選檔</u><br><span class="muted">只收乾淨源：xlsx 對照表 / docx·pptx·pdf（字幕·逐字·校正·.srt·.txt 會排除）</span></div>
+  <input type="file" id="fileIn" multiple style="display:none"/>
+
+  <h3>📁 每次要抽取的檔案 <span class="muted" id="srcCount" style="font-weight:400"></span></h3>
+  <div class="row">
+    <label style="font-size:12px"><input type="checkbox" id="inc" checked/> 增量（只抽新/改動檔；從頭全抽請取消勾選或用 dic build）</label>
+    <button class="primary" id="buildBtn" onclick="doBuild()">🔄 執行 build（Gemma 獨佔窗口）</button>
+    <button id="mindBtn" onclick="doMind()">🧠 嵌入心智圖＋wiki 橋接</button>
+    <button onclick="loadSources();loadStats()">↻ 重整</button>
+  </div>
+  <div id="opsWrap" style="display:none;margin:6px 0">
+    <div style="height:7px;background:#1d2330;border-radius:4px;overflow:hidden">
+      <div id="opsBar" style="height:7px;width:0;background:#2d8cf0;border-radius:4px;transition:width .6s"></div></div>
+    <div id="opsPhase" class="muted" style="font-size:12px;margin-top:3px"></div>
+  </div>
+  <div id="srcNew" class="files"></div>
+  <details id="extDetails"><summary>已抽取（未變動，走快取）<span id="extN"></span></summary><div id="srcExt" class="files"></div></details>
+  <details><summary>排除（不支援/字幕·逐字·校正，可逐檔改為抽取）<span id="skipN"></span></summary><div id="srcSkip" class="files"></div></details>
+  <pre id="log" class="log"></pre>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+let NODES=[],EDGES=[],ADJ={},cam={x:0,y:0,z:1},drag=null,hover=null,sel=null;
+const cv=$("#cv"),ctx=cv.getContext("2d");
+function fit(){cv.width=cv.clientWidth*devicePixelRatio;cv.height=cv.clientHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);}
+addEventListener("resize",fit);fit();
+
+async function cats(){const r=await fetch("/api/knowledge/categories").then(r=>r.json());
+  $("#cat").innerHTML='<option value="">全部領域</option>'+r.categories.map(c=>`<option value="${c.category}">${c.category} (${c.count})</option>`).join("");}
+let GRAPH=null, WIKI=null;          // 原始心智圖資料；wiki 連結 {term:[{title,aliases,score}]}（null＝關閉）
+async function load(){
+  const p=new URLSearchParams({category:$("#cat").value,source:$("#src").value,min_conf:$("#conf").value,q:$("#q").value,limit:$("#lim").value});
+  GRAPH=await fetch("/api/knowledge/graph?"+p,{cache:"no-store"}).then(r=>r.json());
+  if(WIKI) WIKI=null, setWikiBtn();          // 重新篩選 → 退出 wiki 模式
+  paintGraph();
+}
+function paintGraph(){
+  const g=GRAPH,W=cv.clientWidth,H=cv.clientHeight;
+  let nodes=g.nodes.slice(), edges=g.edges.slice();
+  if(WIKI){                                  // 注入 wiki 節點＋實體→wiki 邊（二部圖）
+    const seen={};
+    for(const term in WIKI) for(const w of WIKI[term]){
+      const wid="📖 "+w.title;
+      if(!(wid in seen)){seen[wid]=1;
+        nodes.push({id:wid,kind:"wiki",label:w.title,title:w.title,aliases:w.aliases||[],
+                    score:w.score,color:"#7b3fe4",confidence:0});}
+      edges.push({from:term,to:wid,type:"wiki"});
+    }
+  }
+  $("#stat").textContent=`顯示 ${g.stats.shown}/${g.stats.terms} 詞 · ${g.stats.domains} 領域`
+    + (WIKI?` · wiki ${nodes.filter(n=>n.kind==="wiki").length} 條`:"");
+  NODES=nodes.map((n,i)=>({...n,x:W/2+Math.cos(i)*Math.min(W,H)*0.35*Math.random()+ (Math.random()-.5)*40,
+                              y:H/2+Math.sin(i)*Math.min(W,H)*0.35*Math.random()+ (Math.random()-.5)*40,vx:0,vy:0,
+                              r:n.kind==="domain"?9:n.kind==="wiki"?4:5+(n.confidence||0)*4}));
+  const idx={};NODES.forEach((n,i)=>idx[n.id]=i);
+  EDGES=edges.filter(e=>e.from in idx&&e.to in idx).map(e=>({s:idx[e.from],t:idx[e.to],type:e.type}));
+  ADJ={};EDGES.forEach(e=>{(ADJ[e.s]=ADJ[e.s]||[]).push(e.t);(ADJ[e.t]=ADJ[e.t]||[]).push(e.s);});
+  cam={x:0,y:0,z:1};sel=null;side();T=200;kick();
+}
+function setWikiBtn(){const b=$("#wikiBtn");if(b)b.textContent=WIKI?"✕ 移除 wiki":"🔗 wiki 接地圖";}
+async function toggleWiki(){
+  if(WIKI){WIKI=null;setWikiBtn();paintGraph();return;}
+  if(!GRAPH)return;
+  const terms=GRAPH.nodes.filter(n=>n.kind==="term").map(n=>n.id);
+  if(!terms.length){alert("圖上無實體");return;}
+  if(terms.length>120){alert(`實體太多（${terms.length}）。請先用上方「領域／搜尋／上限」篩選到 ≤120 個，再點 wiki 接地圖。`);return;}
+  const b=$("#wikiBtn");b.textContent="查 wiki…";b.disabled=true;
+  try{
+    WIKI=await fetch("/api/wiki/links",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({terms,k:2,floor:0.65})}).then(r=>r.json());
+  }catch(e){alert("wiki 索引未就緒");WIKI=null;}
+  b.disabled=false;setWikiBtn();paintGraph();
+}
+// ── 力導向（n² 排斥 + 邊彈簧 + 中心重力，冷卻）──
+let T=200;
+function step(){
+  if(T<=0)return;T-=0.5;
+  const W=cv.clientWidth,H=cv.clientHeight,k=T/200;
+  for(let i=0;i<NODES.length;i++){const a=NODES[i];
+    for(let j=i+1;j<NODES.length;j++){const b=NODES[j];
+      let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1;if(d2>90000)continue;
+      const f=900/d2;a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f;}
+    a.vx+=(W/2-a.x)*0.002;a.vy+=(H/2-a.y)*0.002;}
+  EDGES.forEach(e=>{const a=NODES[e.s],b=NODES[e.t];let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;
+    const f=(d-60)*0.01;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});
+  NODES.forEach(n=>{if(n===drag?.n)return;n.x+=n.vx*k;n.y+=n.vy*k;n.vx*=0.85;n.vy*=0.85;});
+}
+function draw(){
+  const W=cv.clientWidth,H=cv.clientHeight;ctx.clearRect(0,0,W,H);
+  ctx.save();ctx.translate(cam.x,cam.y);ctx.scale(cam.z,cam.z);
+  ctx.strokeStyle="#e8e8e8";ctx.lineWidth=1/cam.z;
+  EDGES.forEach(e=>{const a=NODES[e.s],b=NODES[e.t];ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+    ctx.strokeStyle=e.type==="wiki"?"#d9c8f5":e.type==="domain"?"#d8d8d8":"#ececec";ctx.stroke();});
+  const nb=sel!=null?new Set(ADJ[sel]||[]):null;
+  NODES.forEach((n,i)=>{
+    ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,7);
+    ctx.fillStyle=n.color;ctx.globalAlpha=(sel==null||i===sel||nb?.has(i))?1:0.25;ctx.fill();
+    if(i===sel){ctx.lineWidth=2/cam.z;ctx.strokeStyle="#111";ctx.stroke();}
+    if(cam.z>0.8||n.kind==="domain"||i===sel){ctx.globalAlpha=ctx.globalAlpha;ctx.fillStyle="#333";
+      ctx.font=`${(n.kind==="domain"?13:11)/1}px sans-serif`;ctx.fillText(n.label||n.id,n.x+n.r+2,n.y+3);}
+    ctx.globalAlpha=1;});
+  ctx.restore();
+}
+let raf=null;
+function loop(){step();draw();if(T>0.01)raf=requestAnimationFrame(loop);else raf=null;}  // 靜止即停重繪，不燒 idle CPU
+function kick(){if(raf==null)raf=requestAnimationFrame(loop);}                            // 互動／載入時喚醒
+const SRC_LABEL={glossary:"對照表 gold",llm:"LLM 抽取",dict:"字典"};
+const REASON_LABEL={A:"A 專有名稱",B:"B 具名概念（需固定譯法）",C:"C 同音易誤辨"};
+const TIER_LABEL={T1:"T1 對照表(含變體)",T1g:"T1 對照表",T2:"T2 特殊詞",T3:"T3 純語意(僅心智圖)"};
+const CLOSE_BTN='<button class="sclose" onclick="closeSide()" title="關閉">×</button>';
+function closeSide(){sel=null;$("#side").classList.remove("show");kick();}
+function side(n){const s=$("#side");if(!n){s.classList.remove("show");return;}
+  s.classList.add("show");
+  if(n.kind==="wiki"){
+    s.innerHTML=CLOSE_BTN+`<h2>📖 ${esc(n.title)}</h2>
+      <div class="kv"><b>wiki 接地</b> 經心智圖實體橋接（§4.1）· 相似度 ${(n.score||0).toFixed(2)}</div>
+      <div class="sec"><div class="h">別名 / redirect</div>
+        ${(n.aliases||[]).map(v=>`<span class="tag var">${esc(v)}</span>`).join("")||'<span class="muted">無</span>'}</div>
+      <div class="sec"><a href="https://zh.wikipedia.org/wiki/${encodeURIComponent(n.title)}" target="_blank">前往維基百科 →</a></div>
+      <div class="sec"><div class="h muted">wiki 一律 candidate 只當語境，永不自動升 gold（治理鐵律）。</div></div>`;
+    return;}
+  if(n.kind==="domain"){const cnt=(ADJ[NODES.findIndex(x=>x.id===n.id)]||[]).length;
+    s.innerHTML=CLOSE_BTN+`<h2>📁 ${esc(n.label)}</h2><div class="kv"><b>類型</b> 領域分類節點</div>
+      <div class="kv"><b>連入詞</b> ${cnt} 個</div>
+      <div class="sec"><div class="h muted">此為 8 類實體 taxonomy 的分類節點，所有歸屬此類的詞都連到它。</div></div>`;return;}
+  const names=n.names||{};const nameRows=Object.entries(names);
+  s.innerHTML=CLOSE_BTN+`<h2>${esc(n.id)}</h2>
+    ${n.gloss?`<div class="kv" style="color:#555;font-style:italic">「${esc(n.gloss)}」</div>`:''}
+    <div class="kv"><b>領域</b> ${esc(n.category)||'—'}</div>
+    <div class="kv"><b>來源</b> ${SRC_LABEL[n.source]||n.source} ${n.is_special?'· <span style="color:#39b54a">CAG 收錄</span>':''}</div>
+    <div class="kv"><b>tier / 信心</b> ${TIER_LABEL[n.tier]||n.tier||'—'} · ${n.confidence}</div>
+    ${n.reason?`<div class="kv"><b>收錄判準</b> ${REASON_LABEL[n.reason]||n.reason}</div>`:''}
+    <div class="sec"><div class="h">多語固定譯法（names）</div>
+      ${nameRows.length?nameRows.map(([l,v])=>`<div class="kv"><b>${esc(l)}</b> ${esc(v)}</div>`).join("")
+        :'<span class="muted">尚無多語對照</span>'}</div>
+    <div class="sec"><div class="h">字音</div>
+      <div class="kv"><b>語言</b> ${esc(n.term_lang)||'—'}　<b>字音 IPA</b> ${esc(n.ipa)||'—'}</div></div>
+    <div class="sec"><div class="h">ASR 錯法 / 變體${n.is_special?' <span class="muted" style="font-weight:400">· 人工校正（鎖定，build 不還原）</span>':''}</div>
+      <div id="varBox"></div></div>
+    <div class="sec"><div class="h">Wiki 接地（心智圖→wiki 橋，§4.1）</div>
+      <div id="wikiBox"><span class="muted">查詢中…</span></div></div>
+    <div class="sec"><div class="h">人工校正（鎖定、增量 &lt;1s 生效，build 不還原）</div>
+      <button class="gop" data-op="rename">✎ 改正解（改名）</button>
+      ${n.is_special?'<button class="gop" data-op="exclude">⊘ 移出 CAG</button>':'<button class="gop" data-op="include">✓ 收進 CAG</button>'}
+      <button class="gop" data-op="del" style="color:#e84545">🗑 刪節點</button></div>`;
+  mountVar(n.id, n.variants||[], !!n.is_special);
+  loadWiki(n.id);
+  document.querySelectorAll("#side .gop").forEach(b=>b.onclick=()=>gTermOp(n.id, b.dataset.op));
+}
+// 心智圖節點上直接校正（改名/移出·收進 CAG/刪；後端鎖定 + 增量同步嵌入，<1s）
+async function gTermOp(term, op){
+  const u=`/api/cag/terms/${encodeURIComponent(term)}`;
+  let req;
+  if(op==='rename'){const nv=prompt('改正解（重命名，鎖定）：\n'+term+' →',term);if(!nv||!nv.trim()||nv.trim()===term)return;
+    req=fetch(u,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({correct:nv.trim()})});}
+  else if(op==='exclude'){if(!confirm(`「${term}」移出 CAG？\n（不進聲學索引/校正，仍留心智圖；鎖定，build 不還原）`))return;
+    req=fetch(u,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_special:false})});}
+  else if(op==='include'){req=fetch(u,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_special:true})});}
+  else if(op==='del'){if(!confirm(`刪除「${term}」心智圖節點？\n⚠ 來源仍在時 build 可能重抽；持久排除請用「移出 CAG」。`))return;
+    req=fetch(u,{method:'DELETE'});}
+  if(!req)return;
+  try{await req;}catch(e){alert('校正失敗');return;}
+  closeSide();await load();   // 重載心智圖（嵌入後端已同步）
+}
+// 心智圖上直接校正變體（重用 /api/cag/variants；人工版鎖定不被 build 還原）
+function mountVar(term, vs0, editable){
+  const box=document.getElementById("varBox");if(!box)return;
+  let vs=[...vs0];
+  async function put(list){                       // 唯一落地：PUT 覆蓋寫回 vault（locked）+ 刷聲學索引
+    const r=await fetch("/api/cag/variants/"+encodeURIComponent(term),
+      {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({variants:list})}).then(r=>r.json());
+    vs=r.variants||list;
+    const nd=(GRAPH&&GRAPH.nodes||[]).find(x=>x.id===term);if(nd)nd.variants=vs;
+  }
+  function paint(){
+    if(!box.isConnected)return;
+    let h=vs.map((v,i)=>`<span class="tag var">${esc(v)}${editable?` <b data-i="${i}" style="cursor:pointer;color:#e84545">×</b>`:''}</span>`).join("")||'<span class="muted">無</span>';
+    if(editable)h+=` <input id="varAdd" placeholder="+新增" style="width:84px;padding:2px 6px;font-size:12px"/> <button id="varSave" style="padding:2px 10px;font-size:12px">存</button>`;
+    box.innerHTML=h;
+    if(!editable)return;
+    box.querySelectorAll("b[data-i]").forEach(b=>b.onclick=async()=>{   // 點 × 刪某變體 → 立即落地
+      const next=vs.filter((_,i)=>i!==+b.dataset.i);await put(next);paint();});
+    const inp=box.querySelector("#varAdd");
+    const save=async()=>{                         // 唯一注入點：按「存」才把輸入框內容併入並落地
+      const v=inp.value.trim();
+      const next=(v&&!vs.includes(v))?[...vs,v]:[...vs];
+      inp.value="";
+      const btn=box.querySelector("#varSave");if(btn){btn.disabled=true;btn.textContent="存…";}
+      try{await put(next);paint();}              // 成功 → 重繪出新 chip
+      catch(e){const b2=box.querySelector("#varSave");if(b2){b2.disabled=false;b2.textContent="失敗，重試";}}
+    };
+    inp.onkeydown=e=>{if(e.key==="Enter")e.preventDefault();};   // 打字／Enter 都不動作（不注入）；只有按「存」才生效
+    box.querySelector("#varSave").onclick=save;   // 存鈕永遠可按
+  }
+  paint();
+}
+// 點心智圖節點 → 即時用「實體當 query」查 wiki 大庫，顯示 grounded 語境（同一套 graph）
+async function loadWiki(term){
+  const box=document.getElementById("wikiBox");if(!box)return;
+  try{
+    const r=await fetch("/api/wiki/search?k=6&q="+encodeURIComponent(term)).then(r=>r.json());
+    if(!box.isConnected)return;                       // 期間切換了節點 → 放棄
+    if(!r||!r.length){box.innerHTML='<span class="muted">無 wiki 對應（可能是自創/縮寫詞）</span>';return;}
+    box.innerHTML=r.map(w=>`<div class="kv"><b>${(w.score).toFixed(2)}</b>
+      <a href="https://zh.wikipedia.org/wiki/${encodeURIComponent(w.title)}" target="_blank">${esc(w.title)}</a>
+      ${(w.aliases||[]).length?`<span class="muted"> · ${esc((w.aliases||[]).slice(0,3).join("、"))}</span>`:''}</div>`).join("");
+  }catch(e){if(box.isConnected)box.innerHTML='<span class="muted">wiki 索引未就緒</span>';}
+}
+// ── 互動 ──
+function world(e){const r=cv.getBoundingClientRect();return {x:(e.clientX-r.left-cam.x)/cam.z,y:(e.clientY-r.top-cam.y)/cam.z};}
+function pick(e){const w=world(e);let best=null,bd=1e9;NODES.forEach((n,i)=>{const d=Math.hypot(n.x-w.x,n.y-w.y);if(d<n.r+4&&d<bd){bd=d;best=i;}});return best;}
+cv.addEventListener("mousedown",e=>{const i=pick(e);if(i!=null){drag={n:NODES[i],i};sel=i;side(NODES[i]);}else{closeSide();drag={pan:true,sx:e.clientX-cam.x,sy:e.clientY-cam.y};}kick();});
+addEventListener("mousemove",e=>{if(!drag)return;if(drag.pan){cam.x=e.clientX-drag.sx;cam.y=e.clientY-drag.sy;}else{const w=world(e);drag.n.x=w.x;drag.n.y=w.y;drag.n.vx=drag.n.vy=0;T=Math.max(T,40);}kick();});
+addEventListener("mouseup",()=>drag=null);
+cv.addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY<0?1.1:0.9;const r=cv.getBoundingClientRect();
+  const mx=e.clientX-r.left,my=e.clientY-r.top;cam.x=mx-(mx-cam.x)*f;cam.y=my-(my-cam.y)*f;cam.z*=f;kick();},{passive:false});
+$("#conf").addEventListener("input",e=>$("#confv").textContent=e.target.value);
+
+// ── 知識庫管理抽屜 ──────────────────────────────────────────
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const kb=n=>n<1024?n+"B":n<1048576?(n/1024).toFixed(0)+"K":(n/1048576).toFixed(1)+"M";
+function bars(obj,el,color){const m=Math.max(1,...Object.values(obj));
+  el.innerHTML=Object.entries(obj).map(([k,v])=>
+    `<div class="bar"><span class="lbl">${esc(k)}</span><span class="track"><span class="fill" style="width:${v/m*100}%;background:${color||'#2d8cf0'}"></span></span><span class="n">${v}</span></div>`).join("")
+    ||'<div class="muted" style="font-size:12px">（無）</div>';}
+async function loadStats(){const s=await fetch("/api/knowledge/stats").then(r=>r.json());
+  const cagN=(s.cag||[]).reduce((a,c)=>a+c.term_count,0);
+  $("#cards").innerHTML=[["terms",s.terms,"詞 total"],["special",s.special,"特殊詞"],
+    ["CAG",cagN,"判官小抄"],["domains",s.domains,"領域"]]
+    .map(([_,n,l])=>`<div class="card"><b>${n}</b><span>${l}</span></div>`).join("");
+  bars(s.by_category||{},$("#byCat"));bars(s.by_tier||{},$("#byTier"),"#39b54a");
+  bars(s.by_source||{},$("#bySrc"),"#9aa0a6");
+  $("#cagBox").innerHTML="CAG 檔："+((s.cag||[]).map(c=>`knowledge/cag/${esc(c.file)} (${c.term_count} 詞)`).join("、")||"無");}
+function segBtn(f,dec,label){
+  const on=f.decision===dec;const cls=on?(dec==="extract"?"on-ext":"on-exc"):"";
+  const dis=dec==="extract"&&!f.can_parse;            // 無解析器副檔（如 .doc）不能抽
+  return `<button class="sg ${cls}" data-rel="${esc(f.rel)}" data-dec="${dec}"${
+    dis?' disabled title="此副檔無解析器，無法抽取"':''}>${label}</button>`;}
+function fileRow(f){
+  const reset=f.override?`<span class="ovr" data-rel="${esc(f.rel)}" data-dec="auto" title="目前為人工指定，點此恢復自動判斷">↺自動</span>`:'';
+  return `<div class="file"><span class="pill ${f.status}">${
+    ({new:"新",changed:"已改",extracted:"已抽",skip:"排除"})[f.status]}</span>`+
+    `<span class="nm" title="${esc(f.note||f.rel)}">${esc(f.name||f.rel)}</span><span class="muted">${kb(f.size)}</span>`+
+    `<span class="seg">${segBtn(f,"extract","抽取")}${segBtn(f,"exclude","排除")}</span>${reset}</div>`;}
+async function decide(rel,dec){
+  try{await fetch("/api/knowledge/decide",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({rel,decision:dec})});}
+  catch(e){alert("設定失敗："+e);}
+  loadSources();}
+async function moveSrc(rel,action){     // 排除/抽取＝實際搬移檔案（_excluded/ ⇄ 根目錄）
+  try{const r=await fetch("/api/knowledge/move",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({rel,action})}).then(r=>r.json());
+    if(r&&r.error)alert(r.error);}
+  catch(e){alert("搬移失敗："+e);}
+  loadSources();}
+async function loadSources(){const d=await fetch("/api/knowledge/sources").then(r=>r.json());
+  const g={new:[],changed:[],extracted:[],skip:[]};d.sources.forEach(f=>g[f.status].push(f));
+  const c=d.counts||{};
+  $("#srcCount").textContent=`· 待抽 ${(c.new||0)+(c.changed||0)} / 已抽 ${c.extracted||0} / 排除 ${c.skip||0}`;
+  $("#srcNew").innerHTML=[...g.new,...g.changed].map(fileRow).join("")||'<div class="muted" style="font-size:12px">沒有待抽取的新/改動檔。丟新檔進來即增量擴充。</div>';
+  $("#srcExt").innerHTML=g.extracted.map(fileRow).join("");$("#extN").textContent=` (${g.extracted.length})`;
+  $("#srcSkip").innerHTML=g.skip.map(fileRow).join("");$("#skipN").textContent=` (${g.skip.length})`;}
+async function uploadFiles(list){const log=$("#log");log.style.display="block";
+  for(const file of list){const fd=new FormData();fd.append("file",file);
+    const u="/api/knowledge/upload";
+    log.textContent+=`⬆️ ${file.name} … `;
+    try{const r=await fetch(u,{method:"POST",body:fd}).then(r=>r.json());
+      log.textContent+=(r.supported?"OK 待抽取":"已存(build 會略過)")+"\n";}
+    catch(e){log.textContent+="失敗 "+e+"\n";}}
+  log.scrollTop=log.scrollHeight;loadSources();}
+async function doBuild(){const b=$("#buildBtn"),log=$("#log");b.disabled=true;b.textContent="⏳ 獨佔窗口中…";
+  log.style.display="block";$("#opsWrap").style.display="block";
+  log.textContent+="🔄 排入 Gemma 獨佔窗口（收GPU→載Gemma→抽取→換回收斂棧；增量="+$("#inc").checked+")…\n";
+  try{
+    const r=await fetch("/api/ops/build",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({clear:!$("#inc").checked})});
+    if(!r.ok){log.textContent+="❌ "+(await r.text())+"\n";return endBuild(b,log);}
+    const ok=await opsPoll(log);
+    if(ok){log.textContent+="⛓ 接著自動跑：嵌入心智圖＋wiki 橋接…\n";await doMind();}
+    loadStats();loadSources();cats().then(load);
+  }catch(e){log.textContent+="❌ "+e+"\n";}
+  endBuild(b,log);}
+function endBuild(b,log){b.disabled=false;b.textContent="🔄 執行 build（Gemma 獨佔窗口）";log.scrollTop=log.scrollHeight;}
+async function doMind(){const b=$("#mindBtn"),log=$("#log");b.disabled=true;b.textContent="⏳ 嵌入中…";log.style.display="block";
+  try{const r=await fetch("/api/knowledge/embed_mind",{method:"POST"});
+    if(!r.ok)throw new Error(await r.text());
+    const d=await r.json();
+    log.textContent+=`✅ 心智圖嵌入完成：共 ${d.terms} 卡 · 本次新嵌 ${d.embedded} · wiki 重橋接 ${d.wiki_relinked}\n`;
+    loadStats();
+  }catch(e){log.textContent+=`❌ 心智圖嵌入失敗：${String(e).slice(0,120)}（tei-embed 未就緒？Gemma 窗口中？）\n`;}
+  b.disabled=false;b.textContent="🧠 嵌入心智圖＋wiki 橋接";log.scrollTop=log.scrollHeight;}
+async function opsPoll(log){let last="";
+  while(true){await new Promise(s=>setTimeout(s,3000));
+    let st;try{st=await fetch("/api/ops/status").then(r=>r.json());}catch(e){continue;}
+    const line=`[${st.step??0}/${st.steps??5}] ${st.phase||"等待代理認領…"}`;
+    $("#opsBar").style.width=Math.round(100*(st.step??0)/(st.steps||5))+"%";$("#opsPhase").textContent=line;
+    if(line!==last){log.textContent+=line+"\n";last=line;log.scrollTop=log.scrollHeight;}
+    if(st.state==="done"){$("#opsBar").style.width="100%";log.textContent+="✅ 完成\n";return true;}
+    if(st.state==="error"){$("#opsBar").style.background="#e74c3c";log.textContent+="❌ 失敗（詳 data/ops/agent.log）\n";return false;}}}
+function openPanel(){$("#ov").style.display="block";$("#panel").style.display="block";loadStats();loadSources();}
+function closePanel(){$("#ov").style.display="none";$("#panel").style.display="none";}
+// 逐檔抽取/排除：事件委派（檔列動態產生）
+$("#panel").addEventListener("click",e=>{const t=e.target.closest("[data-rel][data-dec]");
+  if(t&&!t.disabled){const d=t.dataset.dec;
+    if(d==="auto")decide(t.dataset.rel,"auto");else moveSrc(t.dataset.rel,d);}});
+// 上傳互動：點擊 + 拖放
+const drop=$("#drop"),fileIn=$("#fileIn");
+drop.onclick=()=>fileIn.click();fileIn.onchange=()=>{if(fileIn.files.length)uploadFiles([...fileIn.files]);fileIn.value="";};
+drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("hot");});
+drop.addEventListener("dragleave",()=>drop.classList.remove("hot"));
+drop.addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("hot");
+  if(e.dataTransfer.files.length)uploadFiles([...e.dataTransfer.files]);});
+addEventListener("keydown",e=>{if(e.key==="Escape"){closePanel();closeSide();}});
+
+cats().then(load);kick();
+</script>
+</body>
+</html>

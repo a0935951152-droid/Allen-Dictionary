@@ -1,0 +1,17 @@
+# ── 密鑰 / 環境（絕不入庫；範本走 .env.example）──
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*-token*
+*secret*
+
+# ── 資料 / 產物 ──
+data/
+**/__pycache__/
+*.pyc
+*.log
+
+# ── 雜項 ──
+.DS_Store
