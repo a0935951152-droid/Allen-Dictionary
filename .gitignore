@@ -6,12 +6,19 @@
 *.pem
 *-token*
 *secret*
+.claude/
 
 # ── 資料 / 產物 ──
 data/
 **/__pycache__/
 *.pyc
 *.log
+
+data/_bench_result.json
+data/batches/
+data/correct/
+data/knowledge/
+data/wiki/
 
 # ── 雜項 ──
 .DS_Store
