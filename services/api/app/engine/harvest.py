@@ -11,7 +11,7 @@
 2. 新詞發現（discover_words）：純統計、無 LLM、無標註——凝固度(PMI)＋左右熵，從生文本撈
    字典沒有的領域多字詞（豆腐岩、海蝕平台）。中文新詞發現經典法。
 3. 本地 NER（clients.ner，ckip）：抽專名補強。
-（可選）本地 LLM 精煉：丟現有 vLLM judge 列術語，預設關（保持確定性/省算力）。
+（可選）本地 LLM 精煉：丟現有 Qwen judge 列術語，預設關（保持確定性/省算力）。
 """
 from __future__ import annotations
 
@@ -150,7 +150,7 @@ async def harvest_text(text: str, use_ner: bool = True, use_newword: bool = True
 
 
 async def _harvest_llm(text: str, confidence: float = 0.85) -> list[dict]:
-    """可選：本地 vLLM judge 列術語/專名（地端）。失敗回空。"""
+    """可選：本地 Qwen judge 列術語/專名（地端）。失敗回空。"""
     prompt = ("你是術語抽取器。從下列領域文本列出『專有名詞與領域術語』（人名/地名/機構/"
               "技術詞/專名），每個都要是文本中出現的詞，不要解釋。只輸出 JSON 字串陣列。\n\n文本：\n"
               + text[:4000])

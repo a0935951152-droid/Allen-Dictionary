@@ -138,7 +138,7 @@
   <h3>📁 每次要抽取的檔案 <span class="muted" id="srcCount" style="font-weight:400"></span></h3>
   <div class="row">
     <label style="font-size:12px"><input type="checkbox" id="inc" checked/> 增量（只抽新/改動檔；從頭全抽請取消勾選或用 dic build）</label>
-    <button class="primary" id="buildBtn" onclick="doBuild()">🔄 執行 build（Gemma 獨佔窗口）</button>
+    <button class="primary" id="buildBtn" onclick="doBuild()">🔄 執行 build（Qwen Q2）</button>
     <button id="mindBtn" onclick="doMind()">🧠 嵌入心智圖＋wiki 橋接</button>
     <button onclick="loadSources();loadStats()">↻ 重整</button>
   </div>
@@ -402,9 +402,9 @@ async function uploadFiles(list){const log=$("#log");log.style.display="block";
       log.textContent+=(r.supported?"OK 待抽取":"已存(build 會略過)")+"\n";}
     catch(e){log.textContent+="失敗 "+e+"\n";}}
   log.scrollTop=log.scrollHeight;loadSources();}
-async function doBuild(){const b=$("#buildBtn"),log=$("#log");b.disabled=true;b.textContent="⏳ 獨佔窗口中…";
+async function doBuild(){const b=$("#buildBtn"),log=$("#log");b.disabled=true;b.textContent="⏳ Qwen 建庫中…";
   log.style.display="block";$("#opsWrap").style.display="block";
-  log.textContent+="🔄 排入 Gemma 獨佔窗口（收GPU→載Gemma→抽取→換回收斂棧；增量="+$("#inc").checked+")…\n";
+  log.textContent+="🔄 排入 Qwen 建庫佇列（使用常駐 Qwen；增量="+$("#inc").checked+")…\n";
   try{
     const r=await fetch("/api/ops/build",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({clear:!$("#inc").checked})});
@@ -414,14 +414,14 @@ async function doBuild(){const b=$("#buildBtn"),log=$("#log");b.disabled=true;b.
     loadStats();loadSources();cats().then(load);
   }catch(e){log.textContent+="❌ "+e+"\n";}
   endBuild(b,log);}
-function endBuild(b,log){b.disabled=false;b.textContent="🔄 執行 build（Gemma 獨佔窗口）";log.scrollTop=log.scrollHeight;}
+function endBuild(b,log){b.disabled=false;b.textContent="🔄 執行 build（Qwen Q2）";log.scrollTop=log.scrollHeight;}
 async function doMind(){const b=$("#mindBtn"),log=$("#log");b.disabled=true;b.textContent="⏳ 嵌入中…";log.style.display="block";
   try{const r=await fetch("/api/knowledge/embed_mind",{method:"POST"});
     if(!r.ok)throw new Error(await r.text());
     const d=await r.json();
     log.textContent+=`✅ 心智圖嵌入完成：共 ${d.terms} 卡 · 本次新嵌 ${d.embedded} · wiki 重橋接 ${d.wiki_relinked}\n`;
     loadStats();
-  }catch(e){log.textContent+=`❌ 心智圖嵌入失敗：${String(e).slice(0,120)}（tei-embed 未就緒？Gemma 窗口中？）\n`;}
+  }catch(e){log.textContent+=`❌ 心智圖嵌入失敗：${String(e).slice(0,120)}（tei-embed 未就緒？）\n`;}
   b.disabled=false;b.textContent="🧠 嵌入心智圖＋wiki 橋接";log.scrollTop=log.scrollHeight;}
 async function opsPoll(log){let last="";
   while(true){await new Promise(s=>setTimeout(s,3000));

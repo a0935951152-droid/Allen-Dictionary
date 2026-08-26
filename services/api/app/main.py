@@ -127,7 +127,7 @@ def _parse_upload(filename: str, data: bytes) -> str:
 
 
 async def _apply_ingest(batch_id: str, raw_text: str, filename: str, kind: str) -> dict:
-    """站0：存 raw + 不覆寫的 v0 原稿 + 智慧整理 meta。smart_organize 走 breeze（離線可降級）。"""
+    """站0：存 raw + 不覆寫的 v0 原稿 + 智慧整理 meta。smart_organize 走 Qwen（離線可降級）。"""
     meta = await review.smart_organize(raw_text, filename)
     with store.lock(batch_id):
         b = _require(batch_id)
@@ -403,8 +403,8 @@ def _agent_alive() -> bool:
 
 @app.post("/api/ops/{op}")
 def ops_request(op: str, body: dict = Body(default={})):
-    """排入獨佔窗口操作（build=知識庫抽取一輪 / judge=判官批次）。單工：進行中一律 409。
-    寫 request.json 給主機端 `dic agent`（收GPU→載Gemma→執行→換回收斂棧），前端輪詢 /api/ops/status。"""
+    """排入常駐模型操作（build=知識庫抽取一輪 / judge=判官批次）。單工：進行中一律 409。
+    寫 request.json 給主機端 `dic agent`（確認Qwen健康→直接執行），前端輪詢 /api/ops/status。"""
     if op not in ("build", "judge"):
         raise HTTPException(404, "未知操作（只支援 build / judge）")
     os.makedirs(_OPS_DIR, exist_ok=True)
@@ -414,7 +414,7 @@ def ops_request(op: str, body: dict = Body(default={})):
             or os.path.exists(os.path.join(_OPS_DIR, "request.json"))
             or os.path.exists(os.path.join(_OPS_DIR, "request.run")))
     if busy:
-        raise HTTPException(409, "已有獨佔窗口操作進行中（GPU 單卡序列化）")
+        raise HTTPException(409, "已有常駐模型操作進行中（同類操作單工）")
     req = {"id": f"{op}_{uuid.uuid4().hex[:8]}", "op": op, "clear": bool(body.get("clear")),
            "requested_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     # 先重置 status 為 queued——否則輪詢方在代理認領前讀到「上一次操作的 done」會誤判秒完成
@@ -430,7 +430,7 @@ def ops_request(op: str, body: dict = Body(default={})):
 
 @app.get("/api/ops/status")
 def ops_status():
-    """獨佔窗口進度（前端輪詢）：agent 心跳 + 目前/最後一次操作的 state/step/phase/log。"""
+    """常駐模型進度（前端輪詢）：agent 心跳 + 目前/最後一次操作的 state/step/phase/log。"""
     st = _ops_read("status.json")
     return {"agent": _agent_alive(),
             "pending": os.path.exists(os.path.join(_OPS_DIR, "request.json")), **st}
@@ -473,14 +473,14 @@ def pipeline_params():
              "anchor = top-k 心智圖(term+variants, ≥LOCAL_FLOOR) ∪ 其預存 wiki(title+aliases, ≥WIKI_FLOOR)",
              "rule_hit = 聲學候選 ∈ anchor（音、意兩軸都及格）",
          ]},
-        {"id": "judge", "name": "④ gemma 判官（四態）", "desc": "吃兩軸證據＋本段接地錨點＋平行多語 → {abandon, xling}。判官只能確認/否決，不能在規則沒接地時自己造修正。",
+        {"id": "judge", "name": "④ Qwen 判官（四態）", "desc": "吃兩軸證據＋本段接地錨點＋平行多語 → {abandon, xling}。判官只能確認/否決，不能在規則沒接地時自己造修正。",
          "params": [
-             P("judge_concurrency", "JUDGE_CONCURRENCY", s.judge_concurrency, "vLLM 併發判定數"),
+             P("judge_concurrency", "JUDGE_CONCURRENCY", s.judge_concurrency, "Qwen llama.cpp slot 併發數"),
              P("common_fpm", "COMMON_FPM", s.common_fpm, "通用詞門檻（jieba 詞頻/百萬詞）：原詞≥此值 → 永不 auto、封頂人工"),
          ],
          "formulas": [
              "四態 = rule_hit × abandon：命中+不拋棄=修(auto)；命中+拋棄/不命中+拋棄=維持；不命中+不拋棄(跨語救回)=人工",
-             "沒跨語命中就拋棄（規則沒撐時 gemma 純語境臆測不足以救）",
+             "沒跨語命中就拋棄（規則沒撐時 Qwen 純語境臆測不足以救）",
              "is_common_word(原詞) → 即使判「修」也降級第④態人工（A1/A3）",
          ]},
         {"id": "commit", "name": "⑤ 回灌 / 輸出", "desc": "auto 決策併入字典；sync 輸出替換規則給下游。守門（A5）：per-context 的結論不得壓扁成無條件規則。",
@@ -564,7 +564,7 @@ def knowledge_categories():
 class KBuildIn(BaseModel):
     domain: str = "speakin"
     use_llm: bool = True            # 切 chunk 餵 LLM 抽詞+語意（GraphRAG 精度層）
-    llm_cap: int = 40               # 每檔最多 chunk 數（控總 LLM 呼叫）
+    llm_cap: int = 40               # 舊客戶相容欄位；整檔模式不再切 chunk，值不生效
     gleanings: int = 1              # GraphRAG gleaning 補抽趟數（拉高召回）
     incremental: bool = True        # 只重抽新/改動檔（內容 hash 快取）；False＝全重抽
     clear: bool = False             # 重建前清空 vault/cag/manifest
@@ -771,7 +771,7 @@ def knowledge_mind_stats():
 async def locate_ep(batch_id: str):
     """階段①「局部語意語音命中」（取代接地）：偵測可疑詞 → 對每個詞產**兩條規則證據**：
     聲學(IPA→CAG 音近候選+距離) ＋ 局部語意(候選實體 vs **該詞局部句**向量餘弦，擋文件主題滲入)。
-    `rule_hit`＝聲學有候選且局部語意撐住。不改字，交階段② gemma 判斷。"""
+    `rule_hit`＝聲學有候選且局部語意撐住。不改字，交階段② Qwen 判斷。"""
     from .engine import reports
     b = _require(batch_id)
     if not b.segments:
@@ -792,7 +792,7 @@ async def locate_ep(batch_id: str):
         cand, hit = reports.rule_hit(sp.reports)
         sp.rule_hit = hit
         sp.grounding = Grounding(checked=True, **{"pass": hit}, candidates=[cand] if cand else [])
-        sp.review = "存疑"                                # 待 gemma 判
+        sp.review = "存疑"                                # 待 Qwen 判
         if hit:
             hits += 1
     gc_by = {}                                            # §3.2③ 兩源語境錨點（心智圖→wiki 橋）逐段接地
@@ -817,14 +817,14 @@ async def locate_ep(batch_id: str):
 
 @app.post("/api/batches/{batch_id}/coarse_fix")
 async def judge_ep(batch_id: str):
-    """階段②「gemma判斷」（取代粗修+精修）：吃規則證據(聲學+局部語意命中)＋平行多語 → gemma 判
+    """階段②「Qwen判斷」（取代粗修+精修）：吃規則證據(聲學+局部語意命中)＋平行多語 → Qwen 判
     拋棄?/跨語命中? → 四態落地：①命中+不拋棄=修 ②命中+拋棄/③不命中+拋棄=維持 ④不命中+不拋棄=人工修正。
     需先 ①局部語意語音命中。"""
     from .engine import refine as judge
     b = _require(batch_id)
     seg_by = {s.seg_id: s for s in b.segments}
     # 只判「未判過」的存疑 span：第④態（decision=human）已進人工佇列，重跑不得重擲骰
-    # （否則 gemma 再判一次可能翻案，人工佇列悄悄流失；人工項只由 /refine 抽屜處理）
+    # （否則 Qwen 再判一次可能翻案，人工佇列悄悄流失；人工項只由 /refine 抽屜處理）
     targets = [s for s in b.spans if s.review == "存疑" and s.decision.to != "human"]
     if not targets:
         return {"fix": 0, "keep": 0, "manual": 0, "candidates": 0}
@@ -845,8 +845,8 @@ async def judge_ep(batch_id: str):
 
 @app.post("/api/judge_pending")
 async def judge_pending_ep():
-    """判官批次（Gemma 獨佔窗口用，搭配 `dic judge`）：掃所有 batch，對 review=='存疑' 的 span
-    跑階段② gemma 判斷（複用單批 judge_ep 邏輯）。累積多批 ground_context 後一次判完。回各批彙總。"""
+    """判官批次（Qwen 常駐模型用，搭配 `dic judge`）：掃所有 batch，對 review=='存疑' 的 span
+    跑階段② Qwen 判斷（複用單批 judge_ep 邏輯）。累積多批 ground_context 後一次判完。回各批彙總。"""
     out = {"batches": 0, "fix": 0, "keep": 0, "manual": 0, "candidates": 0}
     for bid in store.list_batches():
         try:
@@ -862,7 +862,7 @@ async def judge_pending_ep():
 
 @app.post("/api/batches/{batch_id}/refine")
 async def manual_list_ep(batch_id: str):
-    """階段③「人工修正」（取代精修）：列出 gemma 判為人工的 span（規則沒撐、但跨語救回 = 第④態）。
+    """階段③「人工修正」（取代精修）：列出 Qwen 判為人工的 span（規則沒撐、但跨語救回 = 第④態）。
     不自動改字，供人工抽屜逐一處理（decision=human、帶建議候選與上下文）。"""
     b = _require(batch_id)
     manual = [s.span_id for s in b.spans if s.decision.to == "human"]

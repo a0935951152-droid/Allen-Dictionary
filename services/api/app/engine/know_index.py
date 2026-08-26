@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -64,24 +65,38 @@ def _link_wiki(vec, k: int, floor: float) -> list[dict]:
     return [w for w in wiki_index.search_vec(vec, k=k) if w.get("score", 0) >= floor]
 
 
+async def _link_cards(cards: list[dict], k: int, floor: float) -> int:
+    """整批交 Wiki 常駐 process 冷載/查 HNSW；API process 不載 6GB 索引。"""
+    if not cards:
+        return 0
+    from . import wiki_index
+    results = await wiki_index.search_many([card.get("vec") for card in cards], k=k)
+    linked = 0
+    for card, hits in zip(cards, results):
+        card["wiki"] = [w for w in hits if w.get("score", 0) >= floor]
+        linked += 1
+    return linked
+
+
 # ── 建置（增量）：嵌入心智圖實體 + 連帶預存 wiki 連結 ─────────────
 async def build(batch: int = 128, wiki_k: int = 3, wiki_floor: float = 0.4, **_ignore) -> dict:
     """嵌入 vault 實體向量（供接地時 chunk→心智圖 檢索），並用該 vec 連帶查 wiki 大庫存進 card。
     只處理新/變動 term（hash 比對）：**card 增量 → 連帶更新它的 wiki 連結**（hash 未變則沿用，
     缺 wiki 欄位的舊 card 用既有 vec 補查）。wiki 接地頁直接讀此預存（秒回，不實時 embed）。"""
-    nodes = _term_nodes()
-    old = {c["term"]: c for c in _read_cards()}
+    # Vault/cards 都在 NAS：同步掃描會讓 event loop 進 D-state；搬到 thread 保持 health/UI 可回應。
+    nodes, old_cards = await asyncio.gather(
+        asyncio.to_thread(_term_nodes), asyncio.to_thread(_read_cards))
+    old = {c["term"]: c for c in old_cards}
     cards: list[dict] = []
     to_embed: list[dict] = []
-    relinked = 0
+    to_link: list[dict] = []
 
     for n in nodes:
         h = _hash(n)
         prev = old.get(n["id"])
         if prev and prev.get("hash") == h and prev.get("vec"):
             if "wiki" not in prev:                # 舊 card 缺 wiki 連結 → 用既有 vec 補查（不重嵌）
-                prev["wiki"] = _link_wiki(prev["vec"], wiki_k, wiki_floor)
-                relinked += 1
+                to_link.append(prev)
             cards.append(prev)                    # 語意未變 → 沿用（含已存 wiki）
             continue
         card = {"term": n["id"], "gloss": n.get("gloss", ""), "category": n.get("category", ""),
@@ -97,19 +112,25 @@ async def build(batch: int = 128, wiki_k: int = 3, wiki_floor: float = 0.4, **_i
         vecs = await clients.embed([_entity_text(n) for n, _ in chunk])
         for (n, card), v in zip(chunk, vecs):
             card["vec"] = v
-            card["wiki"] = _link_wiki(v, wiki_k, wiki_floor)   # card 增量 → 連帶更新 wiki 連結
+            to_link.append(card)                    # 稍後整批移到 worker thread 查 wiki
             embedded += 1
-            relinked += 1
 
+    # 冷載 6GB HNSW 與所有 knn_query 都在獨立常駐 process；API GIL/event loop 不受影響。
+    relinked = await _link_cards(to_link, wiki_k, wiki_floor)
+
+    await asyncio.to_thread(_write_cards, cards)       # NAS JSON 序列化/原子替換也不阻塞 event loop
+    with _lock:
+        global _cache
+        _cache = None
+    return {"terms": len(cards), "embedded": embedded, "wiki_relinked": relinked}
+
+
+def _write_cards(cards: list[dict]) -> None:
     os.makedirs(_DIR, exist_ok=True)
     tmp = _CARDS + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"cards": cards}, f, ensure_ascii=False)
     os.replace(tmp, _CARDS)
-    with _lock:
-        global _cache
-        _cache = None
-    return {"terms": len(cards), "embedded": embedded, "wiki_relinked": relinked}
 
 
 def _read_cards() -> list[dict]:

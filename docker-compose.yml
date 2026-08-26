@@ -18,71 +18,63 @@ x-gpu: &gpu-reservation
             capabilities: [gpu]
 
 services:
-  # ── ⚠ 已淘汰（2026-07-03）：Breeze-7B 不再常駐——判官全走 vllm-build(Gemma) 獨佔窗口 ──
-  #    dic up 不啟動此服務；定義保留僅供回退。models-net alias `vllm` 由 vllm-build 頂替。
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: dict-vllm
+  # ── 唯一 LLM：Qwen3.8-27B Q2_K_L via llama.cpp ───────────────────
+  # llama.cpp 的 -c 是「所有 slot 共用的總 context」；262144 / 4 = 每 slot 65536。
+  # --fit off 禁止框架在顯存不足時偷偷縮 context，配置不成立就直接暴露 OOM。
+  qwen:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:b5e13ddfaa3df76d239ee038075960a46f595201808728fd70bbf2c8b38f6530
+    container_name: dict-qwen-q2
     <<: *gpu-reservation
     networks: [models-net]
     environment:
       <<: *offline-env
-      HF_HOME: /models/hf-cache
-      VLLM_NO_USAGE_STATS: "1"
       DO_NOT_TRACK: "1"
     volumes:
-      - ${MODELS_ROOT}:/models:ro
-    command: >
-      --model /models/${JUDGE_MODEL_DIR}
-      --served-model-name judge
-      --quantization ${VLLM_QUANT}
-      --gpu-memory-utilization ${VLLM_GPU_FRACTION}
-      --max-model-len ${VLLM_MAX_MODEL_LEN}
-      --max-num-seqs ${VLLM_MAX_NUM_SEQS}
+      - ${QWEN_MODEL_PATH}:/models/model.gguf:ro
+    command:
+      - -m
+      - /models/model.gguf
+      - --alias
+      - judge
+      - -ngl
+      - "99"
+      - -c
+      - ${QWEN_CTX_TOTAL:-262144}
+      - -np
+      - ${QWEN_SLOTS:-4}
+      - -fa
+      - "on"
+      - -ctk
+      - q8_0
+      - -ctv
+      - q8_0
+      - --fit
+      - "off"
+      - --load-mode
+      - mmap
+      - --offline
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --jinja
+      - --reasoning
+      - "off"
+      - --reasoning-format
+      - deepseek
+      - --reasoning-budget
+      - "0"
+      - --temp
+      - "0"
+      - --no-webui
     healthcheck:
-      # vllm/vllm-openai 映像無 `python`（只有 python3）；用 curl 與 TEI 健檢一致，避免假性 unhealthy
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
-      interval: 30s
+      interval: 10s
       timeout: 10s
-      retries: 20
-      start_period: 300s
+      retries: 60
+      start_period: 1800s
     ipc: host
     restart: unless-stopped
-
-  # ── build 判官（知識側一次性 build；序列化、吃滿卡）— Gemma 4 31B AWQ + Marlin turbo ──
-  # profile build：平時不起。`dic build` 停掉 vllm(7B)+TEI 後才起這個（GPU 互斥）。
-  # network alias `vllm` → api 連 vllm:8000 透明（served-name 都 judge）。
-  vllm-build:
-    image: vllm/vllm-openai:latest
-    container_name: dict-vllm-build
-    profiles: ["build"]
-    <<: *gpu-reservation
-    networks:
-      models-net:
-        aliases: [vllm]            # 接管 vllm:8000（runtime vllm 停時）→ api 透明
-    environment:
-      <<: *offline-env
-      HF_HOME: /models/hf-cache
-      VLLM_NO_USAGE_STATS: "1"
-      DO_NOT_TRACK: "1"
-    volumes:
-      - ${MODELS_ROOT}:/models:ro
-    command: >
-      --model /models/${BUILD_MODEL_DIR}
-      --served-model-name judge
-      --quantization ${BUILD_QUANT}
-      --gpu-memory-utilization ${BUILD_GPU_FRACTION}
-      --max-model-len ${BUILD_MAX_MODEL_LEN}
-      --max-num-seqs ${BUILD_MAX_NUM_SEQS}
-      --cpu-offload-gb ${BUILD_CPU_OFFLOAD_GB}
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 30
-      start_period: 420s
-    ipc: host
-    restart: "no"
 
   # ── 嵌入（§3 收斂相似度 / RRF 語意分支）— bge-m3 via TEI ───────────
   tei-embed:
@@ -95,25 +87,6 @@ services:
     # max-client-batch-size 256：bulk 嵌入（wiki 大庫 1.5M 條）提吞吐，預設 32 太小
     command: ["--model-id", "${EMBED_MODEL_PATH}", "--port", "80",
               "--max-client-batch-size", "256", "--max-batch-tokens", "32768"]
-    volumes:
-      - ${MODELS_ROOT}/tei-cache:/data
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:80/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 20
-      start_period: 120s
-    restart: unless-stopped
-
-  # ── ⚠ 已淘汰（2026-07-03）：引擎已無 rerank 呼叫（NMK 移除後死服務）——dic up 不啟動 ──
-  tei-rerank:
-    image: ghcr.io/huggingface/text-embeddings-inference:86-1.8
-    container_name: dict-tei-rerank
-    <<: *gpu-reservation
-    networks: [models-net]
-    environment:
-      <<: *offline-env
-    command: ["--model-id", "${RERANK_MODEL_PATH}", "--port", "80"]
     volumes:
       - ${MODELS_ROOT}/tei-cache:/data
     healthcheck:
@@ -168,10 +141,10 @@ services:
     container_name: dict-api
     networks: [models-net, edge]      # models-net 連模型；edge 對 host/通道公開
     environment:
-      LLM_BASE_URL: http://vllm:8000/v1
+      LLM_BASE_URL: http://qwen:8000/v1
       LLM_MODEL: judge
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-360}
       EMBED_URL: http://tei-embed:80
-      RERANK_URL: http://tei-rerank:80
       NER_URL: http://ner:80
       SAT_URL: http://sat:80
       DATA_DIR: /data
@@ -189,19 +162,22 @@ services:
       LOCAL_FLOOR: ${LOCAL_FLOOR:-0.35}               # 局部語意命中門檻
       WIKI_FLOOR: ${WIKI_FLOOR:-0.55}                 # 語意錨點 wiki 橋接下限
       LOCAL_TOPK: ${LOCAL_TOPK:-5}                    # 局部語意排名取前 k
-      JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-4}      # gemma 判官併發
+      JUDGE_CONCURRENCY: ${JUDGE_CONCURRENCY:-4}      # 對應 Qwen 4 slots
+      KNOW_MAX_FILE_CHARS: ${KNOW_MAX_FILE_CHARS:-6000}  # build 整檔字元硬上限；超過拒絕
+      KNOW_P1_MAX_TOKENS: ${KNOW_P1_MAX_TOKENS:-12288}   # build Pass1 輸出上限
+      KNOW_P2_MAX_TOKENS: ${KNOW_P2_MAX_TOKENS:-12288}   # build Pass2 輸出上限
     volumes:
       - ./data:/data
     ports:
       - "${API_PORT}:8080"
     depends_on:
-      vllm:
+      qwen:
         condition: service_started
       tei-embed:
         condition: service_started
-      tei-rerank:
-        condition: service_started
       ner:
+        condition: service_started
+      sat:
         condition: service_started
     restart: unless-stopped
 

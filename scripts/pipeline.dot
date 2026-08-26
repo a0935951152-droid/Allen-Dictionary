@@ -13,10 +13,10 @@ digraph pipeline {
     label="① 純淨側 · 知識庫建置（dic build）"; style="filled,rounded"; fillcolor="#eef7ff"; color="#9cc3e8"; fontsize=14;
     f_src   [shape=folder, fillcolor="#fff3cd", label="sources/\n.docx .pptx .xlsx .pdf\n（authored 乾淨源）"];
     p_know  [fillcolor="#cfe3ff", label="knowledge.py\n兩階段抽取\nPass1 心智圖→Pass2 CAG"];
-    m_7b1   [shape=box3d, fillcolor="#d6f5d6", label="vLLM\nBreeze-7B"];
+    m_qwen1   [shape=box3d, fillcolor="#d6f5d6", label="llama.cpp\nQwen3.8-27B Q2_K_L\n4 slots × 32K"];
     d_vault [shape=cylinder, fillcolor="#e8e8e8", label="vault 心智圖\n274 md（term/gloss/關係/ipa）"];
     d_cag   [shape=cylinder, fillcolor="#e8e8e8", label="CAG 230\nacoustic.json（正解+變體）"];
-    f_src -> p_know; m_7b1 -> p_know [style=dashed,label="判官"]; p_know -> d_vault; p_know -> d_cag;
+    f_src -> p_know; m_qwen1 -> p_know [style=dashed,label="判官"]; p_know -> d_vault; p_know -> d_cag;
   }
 
   /* ===== wiki 大庫建置 ===== */
@@ -56,9 +56,9 @@ digraph pipeline {
     m_ipa   [shape=box3d, fillcolor="#d6f5d6", label="IPA 規則\nword_distance 逐字"];
     d_spans [shape=cylinder, fillcolor="#e8e8e8", label="spans\n原詞→候選正解（存疑）"];
 
-    p_coa   [fillcolor="#ffd0a0", label="粗修 coarse\n候選∈語境錨點？高信心→直接改"];
-    p_ref   [fillcolor="#ffd0a0", label="精修 refine\n7B 原詞 vs 建議（選/棄權 RPM）"];
-    m_7b2   [shape=box3d, fillcolor="#d6f5d6", label="vLLM\nBreeze-7B"];
+    p_coa   [fillcolor="#ffd0a0", label="兩軸規則證據\nIPA 命中 × 局部語意撐"];
+    p_ref   [fillcolor="#ffd0a0", label="判官 refine\n兩軸證據 + 多語 → 四態"];
+    m_qwen2   [shape=box3d, fillcolor="#d6f5d6", label="llama.cpp\nQwen3.8-27B Q2_K_L\n4 slots × 32K"];
     p_conv  [fillcolor="#ffe0c2", label="收斂 converge\nN/M/K 穩定/搖擺"];
     p_rt    [shape=diamond, fillcolor="#ffe8d0", label="分流 route"];
 
@@ -70,7 +70,7 @@ digraph pipeline {
     m_ner -> p_det [style=dashed]; m_ipa -> p_det [style=dashed];
     d_spans -> p_coa; d_gc -> p_coa [label="錨點"];
     p_coa -> p_ref [label="存疑（粗修未解）"];
-    m_7b2 -> p_ref [style=dashed]; d_gc -> p_ref [style=dashed,label="上下文"];
+    m_qwen2 -> p_ref [style=dashed]; d_gc -> p_ref [style=dashed,label="上下文"];
     p_coa -> p_conv [label="已改"]; p_ref -> p_conv;
     p_conv -> p_rt;
     p_rt -> d_dict [label="auto/verified"];
@@ -88,8 +88,8 @@ digraph pipeline {
   subgraph cluster_stack {
     label="技術棧（封閉 / 離線：模型掛 models-net internal，無對外路由）"; style="filled,rounded"; fillcolor="#f0f0f0"; color="#bbbbbb"; fontsize=13;
     s1 [shape=note, fillcolor=white, label="FastAPI + docker compose"];
-    s2 [shape=note, fillcolor=white, label="vLLM · Breeze-7B W4A16"];
-    s3 [shape=note, fillcolor=white, label="TEI · bge-m3 / bge-reranker"];
+    s2 [shape=note, fillcolor=white, label="llama.cpp · Qwen3.8-27B Q2_K_L"];
+    s3 [shape=note, fillcolor=white, label="TEI · bge-m3"];
     s4 [shape=note, fillcolor=white, label="ckip NER（CPU）"];
     s5 [shape=note, fillcolor=white, label="hnswlib（1.5M 近鄰）"];
     s6 [shape=note, fillcolor=white, label="IPA 規則 word_distance（MISA 天條）"];

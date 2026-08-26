@@ -10,7 +10,7 @@ help:                ## 顯示說明
 env:                 ## 從範本建立 .env（若不存在）
 	@test -f .env || cp .env.example .env && echo "已備妥 .env"
 
-build: env           ## 建構 api 映像（vLLM/TEI 用既有映像）
+build: env           ## 建構 api 映像（Qwen/TEI 用既有映像）
 	docker compose build api
 
 up: env               ## 啟動整個封閉堆疊（模型全離線）
@@ -19,13 +19,13 @@ up: env               ## 啟動整個封閉堆疊（模型全離線）
 ps:                  ## 容器狀態
 	docker compose ps
 
-logs:                ## 跟看日誌（make logs S=vllm）
+logs:                ## 跟看日誌（make logs S=qwen）
 	docker compose logs -f $(S)
 
 down:                ## 停止
 	docker compose down
 
-health:              ## 查 API + 三個模型服務健康
+health:              ## 查 API + Qwen/embed/NER/SaT健康
 	@curl -fsS $(API)/health | python3 -m json.tool
 
 smoke:               ## 跑離線端到端煙霧測試

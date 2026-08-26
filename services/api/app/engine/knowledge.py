@@ -12,10 +12,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import hashlib
 import json
 import os
 import re
+import traceback
+import uuid
 
 from .. import clients
 from ..config import settings
@@ -38,6 +41,8 @@ _SRC = os.path.join(settings.data_dir, "knowledge", "sources")
 _VAULT = os.path.join(settings.data_dir, "knowledge", "vault")
 _CAG = os.path.join(settings.data_dir, "knowledge", "cag")
 _MANIFEST = os.path.join(settings.data_dir, "knowledge", ".manifest.json")
+_AUDIT_DIR = os.path.join(settings.data_dir, "knowledge", "audit", "build")
+_AUDIT_LATEST = os.path.join(_AUDIT_DIR, "latest.json")
 _DECISIONS = os.path.join(settings.data_dir, "knowledge", ".decisions.json")   # 每檔人工抽取/排除覆寫（rel→extract|exclude）
 _ACOUSTIC = os.path.join(settings.data_dir, "knowledge", "acoustic.json")       # 聲學種子：正解+ASR變體 → 餵 §4.1 音韻索引（§5.6 回灌）
 
@@ -67,6 +72,72 @@ def _save_manifest(m: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(m, f, ensure_ascii=False)
     os.replace(tmp, _MANIFEST)
+
+
+def _utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _new_build_audit(incremental: bool) -> dict:
+    """建立單次 build 追溯檔；失敗只寫旁路 audit，不會成為詞或關係。"""
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return {"schema": 1, "run_id": f"{stamp}-{uuid.uuid4().hex[:8]}",
+            "started_at": _utc_now(), "finished_at": None,
+            "mode": "incremental" if incremental else "full",
+            "status": "running", "labels": [], "events": [], "sources": {}}
+
+
+def _audit_failure(audit: dict | None, *, stage: str, source: str, chunk_index: int | None,
+                   attempt: int | None, kind: str, chunk: str = "", raw: str = "",
+                   error: Exception | None = None, meta: dict | None = None) -> str | None:
+    """將 LLM/解析例外隔離到 audit。刻意不回傳任何可被主流程 aggregate 的資料。"""
+    if audit is None:
+        return None
+    event_id = f"E{len(audit['events']) + 1:04d}"
+    label = f"{stage}_{kind}"
+    event = {"id": event_id, "at": _utc_now(), "label": label, "stage": stage,
+             "source": source, "chunk_index": chunk_index, "attempt": attempt,
+             "chunk_sha256": hashlib.sha256(chunk.encode("utf-8")).hexdigest() if chunk else "",
+             "chunk_chars": len(chunk), "chunk_preview": chunk[:240],
+             "error_type": type(error).__name__ if error else kind,
+             "error": str(error)[:1000] if error else "",
+             "raw_response": (raw or "")[:12000], "response_meta": meta or {}}
+    if error:
+        event["traceback"] = traceback.format_exc(limit=12)[-12000:]
+    audit["events"].append(event)
+    if label not in audit["labels"]:
+        audit["labels"].append(label)
+    return event_id
+
+
+def _save_build_audit(audit: dict) -> str:
+    """每輪永久留一份並原子更新 latest；成功輪也留來源標籤，方便追溯。"""
+    os.makedirs(_AUDIT_DIR, exist_ok=True)
+    audit["finished_at"] = _utc_now()
+    path = os.path.join(_AUDIT_DIR, audit["run_id"] + ".json")
+    for dst in (path, _AUDIT_LATEST):
+        tmp = dst + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(audit, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, dst)
+    return path
+
+
+def _json_response_parseable(raw: str, objects: list[dict]) -> bool:
+    """空陣列是合法結果；空字串、截斷 JSON、純文字則視為解析失敗並旁路保存。"""
+    if objects:
+        return True
+    s = (raw or "").strip()
+    if s.startswith("```json"):
+        s = s[7:]
+    elif s.startswith("```"):
+        s = s[3:]
+    if s.endswith("```"):
+        s = s[:-3]
+    try:
+        return isinstance(json.loads(s.strip()), (dict, list))
+    except Exception:
+        return False
 
 
 # ── 每檔抽取決策覆寫（rel → "extract"|"exclude"）：使用者手動凌駕自動判斷 ──────
@@ -257,7 +328,7 @@ _CAT_RULES = [
 
 
 def _taxo_block() -> str:
-    """實體類型定義 + few-shot 範例（餵 Pass1/Pass2/tune 提示詞，幫 7B 用對視角分群）。"""
+    """實體類型定義 + few-shot 範例（餵 Pass1/Pass2/tune 提示詞，幫 Qwen 用對視角分群）。"""
     defs = "；".join(f"{k}（{v}）" for k, v in _TYPE_DESC.items())
     ex = "；".join(f"{w}＝{d}" for w, d in _TYPE_EXAMPLES)
     return (f"實體類型限定（依命名實體種類分類，擇一）：{defs}。\n"
@@ -408,8 +479,8 @@ async def _glossary_hint(rows: list[dict], title: str) -> str:
 
 
 def _serialize_glossary(rows: list[dict], fn: str, hint: str = "") -> str:
-    """對照表 → 帶標題文本（餵 Gemma 補語意）。標題＝檔名＋分頁名 + 資料性質前綴(hint)，
-    讓 Gemma 抓大致語意/領域；正解/變體/配對標鎖定、誤聽變體明示不立節點。"""
+    """對照表 → 帶標題文本（餵 Qwen 補語意）。標題＝檔名＋分頁名 + 資料性質前綴(hint)，
+    讓 Qwen 抓大致語意/領域；正解/變體/配對標鎖定、誤聽變體明示不立節點。"""
     by_sheet: dict[str, list[dict]] = {}
     for r in rows:
         by_sheet.setdefault(r.get("sheet") or fn, []).append(r)
@@ -435,12 +506,12 @@ _TEXT_EXT = {".docx": _read_docx, ".pptx": _read_pptx, ".pdf": _read_pdf,
              ".srt": _read_srt, ".txt": _read_txt}
 
 
-# ── 切 chunk + LLM 抽詞+語意（精度層，取代統計新詞）─────────
-# 整份餵門檻（字元）：≤此值的乾淨檔一次餵給判官（全域脈絡）——讓 Gemma 先懂整個檔在講什麼，
-# 才判得出「標題/作品」這類需全域脈絡的型別、並抓跨段語意；超過才退回貪婪打包（避 lost-in-the-middle）。
-# 貼齊 BUILD_MAX_MODEL_LEN（CJK 約 1.3–1.7 token/字，留指令+輸出餘裕）。
-# 8192 context 固定：整份餵門檻壓在 3000 字（CJK 約 1.3–1.7 token/字，留指令+2400 輸出餘裕，不破 8192）。
-_WHOLE_DOC_MAX = 3000
+# ── 整檔 LLM 抽詞+語意（精度層，取代統計新詞）───────────────
+# Build 不切 chunk：一份 authored 乾淨文件＝一個完整語境。超過硬上限整份旁路，
+# 不截斷、不只吃前半段；64K slot 的餘裕留給提示詞與結構化輸出。
+_MAX_FILE_CHARS = settings.know_max_file_chars
+_P1_MAX_TOKENS = settings.know_p1_max_tokens
+_P2_MAX_TOKENS = settings.know_p2_max_tokens
 
 
 def _doc_title(text: str) -> str:
@@ -452,24 +523,6 @@ def _doc_title(text: str) -> str:
     return ""
 
 
-def _chunk_text(text: str, size: int = 700, title: str | None = None) -> list[str]:
-    """乾淨文件切 chunk（句界貪婪打包，保留英文/混語）。長檔才用；短檔走整份餵（見 _extract_doc）。
-    title：分塊時每塊夾帶【文件標題】——讓判官即使只看到某塊也知道整檔在講什麼（才判得出標題/作品、不誤判內文）。"""
-    parts, buf, n = [], [], 0
-    for seg in re.split(r"(?<=[。！？!?\n])", text or ""):
-        if not seg.strip():
-            continue
-        if buf and n + len(seg) > size:
-            parts.append("".join(buf)); buf, n = [], 0
-        buf.append(seg); n += len(seg)
-    if buf:
-        parts.append("".join(buf))
-    if title:
-        head = f"【文件標題】{title}\n"
-        parts = [head + p for p in parts]
-    return parts
-
-
 # 兩階段抽取（coarse-to-fine）：Pass1 語意心智圖（廣度）→ Pass2 吃 Pass1 全局理解抽特殊詞 CAG（精度）。
 # 分類軸＝命名實體類型（_TAXO：8 類實體，GraphRAG 標準分類），未分類誠實兜底（修 ④）。
 
@@ -477,7 +530,7 @@ def _chunk_text(text: str, size: int = 700, title: str | None = None) -> list[st
 def _iter_objs(raw: str):
     """物件解析（平衡括號，支援巢狀 names/src）：掃出頂層 {...}，json.loads；
     若含 entities/relationships 陣列就攤平 yield 每個元素，否則 yield 該物件本身。
-    （26B 後 Pass1 改巢狀多語結構 names:{ISO:寫法}+src:{ISO:text/gen}，需平衡括號才解得到。）"""
+    （現行 Pass1 採巢狀多語結構 names:{ISO:寫法}+src:{ISO:text/gen}，需平衡括號才解得到。）"""
     depth, start = 0, -1
     for i, ch in enumerate(raw):
         if ch == "{":
@@ -532,18 +585,44 @@ def _pass1_prompt(chunk: str, already: list[str] | None = None) -> str:
     return p + "\n文本：\n" + chunk
 
 
-async def _pass1_semantic(chunk: str, gleanings: int = 1) -> dict:
+async def _pass1_semantic(chunk: str, gleanings: int = 1, *, audit: dict | None = None,
+                          source: str = "", chunk_index: int = 0) -> dict:
     """單 chunk 語意抽取（首趟 + gleaning 補抽）。回 {entities:{flat:e}, relationships:[]}。"""
     ents: dict[str, dict] = {}
     rels: list[dict] = []
+    labels: list[str] = []
+    event_ids: list[str] = []
     for i in range(1 + max(0, gleanings)):
         found = [e["term"] for e in ents.values()] if i else None
         try:
-            raw = await clients.judge_chat(_pass1_prompt(chunk, found), max_tokens=2400)
-        except Exception:
+            response = await clients.judge_chat_result(_pass1_prompt(chunk, found), max_tokens=_P1_MAX_TOKENS)
+            raw = response["content"]
+        except Exception as ex:
+            eid = _audit_failure(audit, stage="p1", source=source, chunk_index=chunk_index,
+                                 attempt=i + 1, kind="exception", chunk=chunk, error=ex)
+            labels.append("p1_failed" if i == 0 else "p1_partial")
+            if eid:
+                event_ids.append(eid)
+            break
+        if response.get("finish_reason") == "length":
+            eid = _audit_failure(audit, stage="p1", source=source, chunk_index=chunk_index,
+                                 attempt=i + 1, kind="length", chunk=chunk, raw=raw,
+                                 meta={"finish_reason": response.get("finish_reason"),
+                                       "usage": response.get("usage", {})})
+            labels.append("p1_failed" if i == 0 else "p1_partial")
+            if eid:
+                event_ids.append(eid)
+            break                              # 截斷輸出整次旁路，不解析、不接主流程
+        objects = list(_iter_objs(raw))
+        if not _json_response_parseable(raw, objects):
+            eid = _audit_failure(audit, stage="p1", source=source, chunk_index=chunk_index,
+                                 attempt=i + 1, kind="parse_failed", chunk=chunk, raw=raw)
+            labels.append("p1_failed" if i == 0 else "p1_partial")
+            if eid:
+                event_ids.append(eid)
             break
         new = 0
-        for obj in _iter_objs(raw):
+        for obj in objects:
             if obj.get("term") or obj.get("name"):
                 n = str(obj.get("term") or obj.get("name")).strip()
                 if n and not n.isdigit() and _is_term(n) and n in chunk and _flat(n) not in ents:
@@ -559,7 +638,9 @@ async def _pass1_semantic(chunk: str, gleanings: int = 1) -> dict:
                     rels.append({"source": s, "target": t, "desc": str(obj.get("desc", "")).strip()[:50]})
         if i and new == 0:
             break
-    return {"entities": ents, "relationships": rels}
+    status = "failed" if "p1_failed" in labels else ("partial" if labels else "complete")
+    return {"entities": ents, "relationships": rels, "status": status,
+            "labels": sorted(set(labels)), "audit_event_ids": event_ids}
 
 
 # ── Pass 2：特殊詞 CAG（吃 Pass1 全局理解；精度、不能錯）──────
@@ -572,7 +653,7 @@ def _pass2_prompt(chunk: str, known: list[str], title: str = "") -> str:
     領域感知：同一個詞在其所屬領域是否該收，依本文主題判斷（地質文件的『海蝕』值得收，泛文不必）。"""
     dom = (f"本文主題／領域：{title}\n（請依此領域判斷專詞值不值得收——領域核心專詞要收、與領域無關的泛詞不收。）\n") if title else ""
     ctx = ("全篇關鍵詞脈絡：" + "、".join(known[:60]) + "\n") if known else ""
-    # 文本在前、輸出指令在後（避免 7B 把長指令後的文本直接續寫、不產 JSON）。
+    # 文本在前、輸出指令在後（避免模型把長指令後的文本直接續寫、不產 JSON）。
     return (
         "你是為『跨語言翻譯』建立術語表的嚴格編纂員，寧缺勿濫——"
         "只收『翻譯時必須前後一致、譯錯會出事』的詞，供之後各語言固定譯法對齊。\n" + dom + ctx +
@@ -590,14 +671,33 @@ def _pass2_prompt(chunk: str, known: list[str], title: str = "") -> str:
         '[{"term":"","reason":"A","type":"","names":{},"src":{},"variants":[]}]')
 
 
-async def _pass2_special(chunk: str, known: list[str], title: str = "") -> dict:
+async def _pass2_special(chunk: str, known: list[str], title: str = "", *,
+                         audit: dict | None = None, source: str = "",
+                         chunk_index: int = 0) -> tuple[dict, dict]:
     """單 chunk 術語表收錄（吃全局 known + 領域 title，A/B/C 判準）。回 {flat: {term,reason,names,variants}}。"""
     try:
-        raw = await clients.judge_chat(_pass2_prompt(chunk, known, title), max_tokens=4096)
-    except Exception:
-        return {}
+        response = await clients.judge_chat_result(_pass2_prompt(chunk, known, title), max_tokens=_P2_MAX_TOKENS)
+        raw = response["content"]
+    except Exception as ex:
+        eid = _audit_failure(audit, stage="p2", source=source, chunk_index=chunk_index,
+                             attempt=1, kind="exception", chunk=chunk, error=ex)
+        return {}, {"status": "failed", "labels": ["p2_failed"],
+                    "audit_event_ids": [eid] if eid else []}
+    if response.get("finish_reason") == "length":
+        eid = _audit_failure(audit, stage="p2", source=source, chunk_index=chunk_index,
+                             attempt=1, kind="length", chunk=chunk, raw=raw,
+                             meta={"finish_reason": response.get("finish_reason"),
+                                   "usage": response.get("usage", {})})
+        return {}, {"status": "failed", "labels": ["p2_failed", "p2_length"],
+                    "audit_event_ids": [eid] if eid else []}
     out: dict[str, dict] = {}
-    for obj in _iter_objs(raw):
+    objects = list(_iter_objs(raw))
+    if not _json_response_parseable(raw, objects):
+        eid = _audit_failure(audit, stage="p2", source=source, chunk_index=chunk_index,
+                             attempt=1, kind="parse_failed", chunk=chunk, raw=raw)
+        return {}, {"status": "failed", "labels": ["p2_failed", "p2_parse_failed"],
+                    "audit_event_ids": [eid] if eid else []}
+    for obj in objects:
         t = str(obj.get("term", "")).strip()
         if not t or t.isdigit() or not _is_term(t) or t not in chunk:
             continue
@@ -612,29 +712,35 @@ async def _pass2_special(chunk: str, known: list[str], title: str = "") -> dict:
         out[_flat(t)] = {"term": t, "reason": reason, "variants": variants,
                          "type": str(obj.get("type") or obj.get("domain", "")).strip()[:12],
                          "names": nm, "src": _name_src(nm, chunk)}
-    return out
+    return out, {"status": "complete", "labels": [], "audit_event_ids": []}
 
 
-async def _extract_doc(text: str, cap: int = 40, conc: int = 8, gleanings: int = 1, title: str = "") -> dict:
-    """兩階段：Pass1 逐 chunk 語意（並行）→ 聚合文件級理解 → Pass2 逐 chunk 抽特殊詞（吃全局+領域 title）。
+async def _extract_doc(text: str, cap: int = 40, conc: int = 8, gleanings: int = 1,
+                       title: str = "", *, audit: dict | None = None, source: str = "") -> dict:
+    """兩階段整檔抽取：Pass1 全文語意 → Pass2 全文抽特殊詞（吃 Pass1 理解+領域 title）。
+    cap/conc 僅保留呼叫相容；整檔模式不切塊、不使用兩參數。
     title＝本文主題/領域（glossary 傳 hint、doc 自動取首行），餵 Pass2 做領域感知收錄。
     回 {entities:{flat:e}, relationships:[]}；entity 含語意面(type/gloss/names)＋正確度面(reason/variants/is_special)。"""
     dtitle = title or _doc_title(text)
-    # 整份餵：短檔不切，讓判官讀懂整個檔在講什麼（才正確判標題/作品、抓跨段語意）；
-    # 長檔退回貪婪打包，但每塊夾帶【文件標題】保留全域錨（避 lost-in-the-middle 又不失主題）。
-    chunks = ([text] if 0 < len(text) <= _WHOLE_DOC_MAX
-              else _chunk_text(text, size=1100, title=dtitle))
-    chunks = chunks[:cap]
-    if not chunks:
-        return {"entities": {}, "relationships": []}
+    if not text:
+        return {"entities": {}, "relationships": [], "build_status": "complete",
+                "labels": [], "stage_status": {"p1": [], "p2": []}, "audit_event_ids": []}
+    if len(text) > _MAX_FILE_CHARS:
+        eid = _audit_failure(audit, stage="file", source=source, chunk_index=None,
+                             attempt=None, kind="too_large", chunk=text,
+                             meta={"max_file_chars": _MAX_FILE_CHARS, "actual_chars": len(text)})
+        return {"entities": {}, "relationships": [], "build_status": "failed",
+                "labels": ["file_too_large"], "stage_status": {"p1": [], "p2": []},
+                "audit_event_ids": [eid] if eid else []}
+    chunks = [text]                    # 整檔＝唯一輸入單位；禁止隱性截斷或 fallback 切塊
     sem = asyncio.Semaphore(conc)
 
-    async def p1(ch):
+    async def p1(i, ch):
         async with sem:
-            return await _pass1_semantic(ch, gleanings)
+            return await _pass1_semantic(ch, gleanings, audit=audit, source=source, chunk_index=i)
 
     # Pass 1：語意（並行）→ 聚合
-    res1 = await asyncio.gather(*[p1(c) for c in chunks])
+    res1 = await asyncio.gather(*[p1(i, c) for i, c in enumerate(chunks)])
     ents: dict[str, dict] = {}
     rels: list[dict] = []
     for r in res1:
@@ -655,12 +761,13 @@ async def _extract_doc(text: str, cap: int = 40, conc: int = 8, gleanings: int =
     # Pass 2：術語表收錄（吃 Pass1 全局理解，A/B/C 判準）
     known = [e["term"] for e in sorted(ents.values(), key=lambda x: -x["occ"])]
 
-    async def p2(ch):
+    async def p2(i, ch):
         async with sem:
-            return await _pass2_special(ch, known, dtitle)
+            return await _pass2_special(ch, known, dtitle, audit=audit,
+                                        source=source, chunk_index=i)
 
-    res2 = await asyncio.gather(*[p2(c) for c in chunks])
-    for sp in res2:
+    res2 = await asyncio.gather(*[p2(i, c) for i, c in enumerate(chunks)])
+    for sp, _meta in res2:
         for k, s in sp.items():
             cur = ents.get(k)
             if not cur:                       # Pass2 撈到 Pass1 漏的收錄詞 → 補成實體（未分類兜底，修 ①）
@@ -679,12 +786,23 @@ async def _extract_doc(text: str, cap: int = 40, conc: int = 8, gleanings: int =
             for v in s["variants"]:
                 if v not in cur["variants"]:
                     cur["variants"].append(v)
-    return {"entities": ents, "relationships": rels}
+    p1_meta = [{"chunk": i, "status": r["status"], "labels": r["labels"],
+                "audit_event_ids": r["audit_event_ids"]} for i, r in enumerate(res1)]
+    p2_meta = [{"chunk": i, **meta} for i, (_sp, meta) in enumerate(res2)]
+    labels = sorted({label for row in p1_meta + p2_meta for label in row["labels"]})
+    event_ids = [eid for row in p1_meta + p2_meta for eid in row["audit_event_ids"]]
+    all_failed = bool(chunks) and all(r["status"] == "failed" for r in res1) and all(
+        meta["status"] == "failed" for _sp, meta in res2)
+    return {"entities": ents, "relationships": rels,
+            "build_status": "failed" if all_failed else ("partial" if labels else "complete"),
+            "labels": labels, "stage_status": {"p1": p1_meta, "p2": p2_meta},
+            "audit_event_ids": event_ids}
 
 
 # ── 單檔抽取（產可序列化記錄，供 manifest 快取）──────────────
 async def _extract_file(path: str, fn: str, ext: str,
-                        use_llm: bool, llm_cap: int, gleanings: int, force: bool = False) -> dict:
+                        use_llm: bool, llm_cap: int, gleanings: int, force: bool = False,
+                        *, audit: dict | None = None, source: str = "") -> dict:
     """一個來源檔 → 記錄 {kind, ...}。kind=glossary/doc/skip。doc/glossary 內容可 JSON 快取。
     force=True（使用者手動指定抽取）→ 略過逐字/字幕/校正與非乾淨副檔的自動排除門。"""
     if _DIRTY_NAME.search(fn) and not force:            # 逐字/字幕/校正/三語對齊：含 ASR 錯字，排除（§3 鐵律）
@@ -694,26 +812,39 @@ async def _extract_file(path: str, fn: str, ext: str,
         if not rows:
             return {"kind": "skip", "note": fn + "(非對照表)"}
         ents, rels = {}, []
-        if use_llm:                                     # 也給 Gemma：序列化帶標題+資料性質前綴 → 補 gloss/type/關係
+        if use_llm:                                     # 也給 Qwen：序列化帶標題+資料性質前綴 → 補 gloss/type/關係
             base = os.path.splitext(fn)[0]
             hint = await _glossary_hint(rows, base)
             block = _serialize_glossary(rows, base, hint)
-            doc = await _extract_doc(block, cap=llm_cap, gleanings=gleanings, title=hint or base)
+            doc = await _extract_doc(block, cap=llm_cap, gleanings=gleanings, title=hint or base,
+                                     audit=audit, source=source or fn)
             vk = {_flat(v) for r in rows for v in r.get("variants", [])}   # 誤聽變體不立節點
             ents = {k: e for k, e in doc["entities"].items()
                     if k not in vk and e["term"] not in _GLOSSARY_STOP}    # 並擋序列化結構字
             rels = doc["relationships"]
+        doc_status = doc.get("build_status", "complete") if use_llm else "complete"
+        doc_labels = list(doc.get("labels", [])) if use_llm else []
+        # glossary rows 是人工 gold；LLM 豐化即使全失敗，也只隔離 LLM 輸出，不能丟掉 gold 主資料。
+        if rows and doc_status == "failed":
+            doc_status = "partial"
+            doc_labels.append("glossary_enrichment_failed")
         return {"kind": "glossary", "rows": rows, "entities": ents, "relationships": rels,
-                "note": f"{fn}→{len(rows)}詞(glossary)+{len(ents)}語意"}
+                "note": f"{fn}→{len(rows)}詞(glossary)+{len(ents)}語意",
+                "build_status": doc_status, "labels": sorted(set(doc_labels)),
+                "stage_status": doc.get("stage_status", {}) if use_llm else {},
+                "audit_event_ids": doc.get("audit_event_ids", []) if use_llm else []}
     if ext in _TEXT_EXT:
         if ext not in _CLEAN_EXT and not force:         # .srt/.txt＝逐字稿/字幕來源，知識側不收（force 可強收）
             return {"kind": "skip", "note": fn + f"({ext} 逐字/字幕來源，排除)"}
         if not use_llm:
             return {"kind": "skip", "note": fn + "(use_llm=False)"}
-        doc = await _extract_doc(_TEXT_EXT[ext](path), cap=llm_cap, gleanings=gleanings)
+        doc = await _extract_doc(_TEXT_EXT[ext](path), cap=llm_cap, gleanings=gleanings,
+                                 audit=audit, source=source or fn)
         sp = sum(1 for e in doc["entities"].values() if e["is_special"])
         return {"kind": "doc", "entities": doc["entities"], "relationships": doc["relationships"],
-                "note": f"{fn}→{len(doc['entities'])}實體/{sp}特殊/{len(doc['relationships'])}關係"}
+                "note": f"{fn}→{len(doc['entities'])}實體/{sp}特殊/{len(doc['relationships'])}關係",
+                "build_status": doc["build_status"], "labels": doc["labels"],
+                "stage_status": doc["stage_status"], "audit_event_ids": doc["audit_event_ids"]}
     return {"kind": "skip", "note": f"{fn}({ext or '無副檔'})"}
 
 
@@ -728,7 +859,7 @@ def _aggregate(rec: dict, src: str, terms: dict, rels: list) -> None:
                             "variants": _clean_variants(e["variants"], e["term"], (cur or {}).get("variants", [])),
                             "names": {**(cur or {}).get("names", {}), **e.get("names", {})},      # 強制配對保留
                             "src": {**(cur or {}).get("src", {}), **e.get("src", {})}}            # glossary 來源標記
-        # Gemma 補的語意回填 gold（只補空 gloss/類別/語言，不碰鎖定的正解/變體/配對）
+        # Qwen 補的語意回填 gold（只補空 gloss/類別/語言，不碰鎖定的正解/變體/配對）
         for k, ent in rec.get("entities", {}).items():
             cur = terms.get(k)
             if not cur:                                   # glossary 文本只豐化已知 gold，不新增節點
@@ -821,7 +952,7 @@ async def _tune_categories(terms: dict[str, dict], conc: int = 8) -> dict:
 
 # ── 萃取彙總（增量 + 證據分層）──────────────────────────────
 async def _harvest_sources(use_llm: bool = True, llm_cap: int = 40, gleanings: int = 1,
-                           incremental: bool = True) -> dict:
+                           incremental: bool = True, audit: dict | None = None) -> dict:
     """遞迴走 sources/ → 內容 hash 增量抽取（只重抽新/改動檔，其餘讀 manifest 快取）→ 合併。
     回 {terms,relationships,used,skipped,reused}。"""
     manifest = _load_manifest() if incremental else {}
@@ -829,7 +960,7 @@ async def _harvest_sources(use_llm: bool = True, llm_cap: int = 40, gleanings: i
     new_manifest: dict = {}
     terms: dict[str, dict] = {}
     rels: list[dict] = []
-    skipped, used, reused = [], [], 0
+    skipped, used, reused, partial_files, failed_files = [], [], 0, [], []
     for root, _dirs, files in os.walk(_SRC):       # 遞迴：支援 sources/<領域>/ 子目錄
         _dirs[:] = [d for d in _dirs if not d.startswith(("_", ".")) and d != "package"]  # 略過 _excluded/封存、package(檢視產物)
         for fn in sorted(files):
@@ -844,24 +975,56 @@ async def _harvest_sources(use_llm: bool = True, llm_cap: int = 40, gleanings: i
                 skipped.append(f"{fn}（{tag}）")
                 continue
             force = override == "extract"              # 人工指定抽取 → 強收（略過自動排除門）
+            h, cached, hit = "", None, False
             try:
                 h = _file_hash(path)
                 cached = manifest.get(rel)
-                hit = bool(incremental and cached and cached.get("hash") == h)
+                # partial/failed 絕不可永久快取：內容沒變也必須在下一輪重試。
+                hit = bool(incremental and cached and cached.get("hash") == h
+                           and cached.get("build_status", "complete") == "complete")
                 if hit:
                     rec = cached                       # 內容未變 → 讀快取，免重抽
                     reused += 1
                 else:
-                    rec = await _extract_file(path, fn, ext, use_llm, llm_cap, gleanings, force=force)
+                    rec = await _extract_file(path, fn, ext, use_llm, llm_cap, gleanings,
+                                              force=force, audit=audit, source=rel)
                     rec["hash"] = h
             except Exception as ex:
+                eid = _audit_failure(audit, stage="file", source=rel, chunk_index=None,
+                                     attempt=None, kind="exception", error=ex)
+                rec = {"kind": "error", "hash": h, "note": f"{fn}(抽取失敗)",
+                       "build_status": "failed", "labels": ["file_failed"],
+                       "stage_status": {}, "audit_event_ids": [eid] if eid else []}
+                if audit is not None:
+                    rec["audit_run_id"] = audit["run_id"]
+                new_manifest[rel] = rec
+                if audit is not None:
+                    audit["sources"][rel] = {"status": "failed", "labels": rec["labels"],
+                                             "stage_status": {},
+                                             "audit_event_ids": rec["audit_event_ids"]}
                 skipped.append(f"{fn}(錯誤:{str(ex)[:40]})")
+                failed_files.append(rel)
                 continue
             if rec["kind"] == "skip":
                 skipped.append(rec["note"])            # skip 不快取（便宜、每次重判，避免 use_llm 切換誤用）
                 continue
+            if not hit and audit is not None:
+                rec["audit_run_id"] = audit["run_id"]
             new_manifest[rel] = rec                     # 只快取 glossary/doc（昂貴的抽取結果）
-            used.append(rec["note"] + (" [快取]" if (cached and cached.get("hash") == h) else ""))
+            status = rec.get("build_status", "complete")
+            labels = rec.get("labels", [])
+            if audit is not None:
+                audit["sources"][rel] = {"status": status, "labels": labels,
+                                         "stage_status": rec.get("stage_status", {}),
+                                         "audit_event_ids": rec.get("audit_event_ids", [])}
+            used.append(rec["note"] + (" [快取]" if hit else "") +
+                        (f" [{status}:{','.join(labels)}]" if status != "complete" else ""))
+            if status == "failed":
+                failed_files.append(rel)
+                skipped.append(f"{fn}（抽取失敗，已旁路保存）")
+                continue                              # 失敗記錄絕不接主流程
+            if status == "partial":
+                partial_files.append(rel)             # 只併成功輸出；失敗本身只在 audit
             _aggregate(rec, rel, terms, rels)
     _save_manifest(new_manifest)        # 永遠存：incremental 只控「讀不讀舊快取」，全抽後仍須存以初始化增量
 
@@ -887,7 +1050,8 @@ async def _harvest_sources(use_llm: bool = True, llm_cap: int = 40, gleanings: i
             rel_map.setdefault((ks, kt), {"source": terms[ks]["term"],
                                           "target": terms[kt]["term"], "desc": r["desc"]})
     return {"terms": terms, "relationships": list(rel_map.values()),
-            "used": used, "skipped": skipped, "reused": reused}
+            "used": used, "skipped": skipped, "reused": reused,
+            "partial_files": partial_files, "failed_files": failed_files}
 
 
 # ── Obsidian vault + CAG 寫出 ────────────────────────────
@@ -1237,6 +1401,8 @@ def list_sources() -> dict:
                 status = "skip"
             elif eff == "exclude":
                 status = "skip"                       # 排除（自動或人工）
+            elif cached and cached.get("hash") == h and cached.get("build_status") in ("partial", "failed"):
+                status = cached["build_status"]       # 有旁路錯誤；下次 build 必須重試，不能當完成快取
             elif cached and cached.get("hash") == h:
                 status = "extracted"                  # 已抽、內容未變 → 走快取
             elif cached:
@@ -1247,6 +1413,11 @@ def list_sources() -> dict:
             note = "封存（_excluded／移回 sources 根目錄才會抽）" if archived else (cached or {}).get("note", "")
             out.append({"rel": rel, "name": fn, "ext": ext, "size": size,
                         "status": status, "kind": (cached or {}).get("kind"), "note": note,
+                        "build_status": (cached or {}).get("build_status", "complete") if cached else None,
+                        "labels": (cached or {}).get("labels", []),
+                        "stage_status": (cached or {}).get("stage_status", {}),
+                        "audit_event_ids": (cached or {}).get("audit_event_ids", []),
+                        "audit_run_id": (cached or {}).get("audit_run_id"),
                         "archived": archived,
                         "decision": eff, "override": override, "auto": auto, "can_parse": can_parse})
     return {"sources": sorted(out, key=lambda r: (r["status"] != "new",
@@ -1391,15 +1562,32 @@ async def build(domain: str = "speakin", use_llm: bool = True, llm_cap: int = 40
     """主入口：sources/ → vault + cag。增量：只重抽新/改動檔（內容 hash），其餘讀快取；
     人工 locked 的 note 語意欄位不覆寫（§11 可持續擴充）。"""
     from collections import Counter
-    h = await _harvest_sources(use_llm=use_llm, llm_cap=llm_cap, gleanings=gleanings,
-                               incremental=incremental)
-    terms, rels = h["terms"], h["relationships"]
-    tune = await _tune_categories(terms) if use_llm else {"tuned": 0, "recovered": 0}  # 心智圖→tune misfit→CAG
-    vault = _write_vault(terms, rels)
-    cag = _write_cag(terms, domain)
-    acoustic = _write_acoustic(terms)         # §5.6 回灌：正解+變體 → §4.1 音韻索引（下次查詢自動重建）
-    return {"terms": len(terms), "relationships": len(rels), "reused_files": h.get("reused", 0),
-            "tiers": dict(Counter(e.get("tier") for e in terms.values())),
-            "categories": dict(Counter(e.get("category") for e in terms.values())),
-            "tune": tune, "vault": vault, "cag": cag, "acoustic": acoustic,
-            "used": h["used"], "skipped": h["skipped"]}
+    audit = _new_build_audit(incremental)
+    try:
+        h = await _harvest_sources(use_llm=use_llm, llm_cap=llm_cap, gleanings=gleanings,
+                                   incremental=incremental, audit=audit)
+        terms, rels = h["terms"], h["relationships"]
+        tune = await _tune_categories(terms) if use_llm else {"tuned": 0, "recovered": 0}  # 心智圖→tune misfit→CAG
+        vault = _write_vault(terms, rels)
+        cag = _write_cag(terms, domain)
+        acoustic = _write_acoustic(terms)         # §5.6 回灌：正解+變體 → §4.1 韻索引（下次查詢自動重建）
+        audit["status"] = "partial" if (h["partial_files"] or h["failed_files"]) else "complete"
+        audit["summary"] = {"events": len(audit["events"]),
+                            "partial_files": h["partial_files"], "failed_files": h["failed_files"]}
+        audit_path = _save_build_audit(audit)
+        return {"terms": len(terms), "relationships": len(rels), "reused_files": h.get("reused", 0),
+                "build_status": audit["status"], "labels": audit["labels"],
+                "partial_files": h["partial_files"], "failed_files": h["failed_files"],
+                "audit": {"run_id": audit["run_id"], "path": audit_path,
+                          "events": len(audit["events"])},
+                "tiers": dict(Counter(e.get("tier") for e in terms.values())),
+                "categories": dict(Counter(e.get("category") for e in terms.values())),
+                "tune": tune, "vault": vault, "cag": cag, "acoustic": acoustic,
+                "used": h["used"], "skipped": h["skipped"]}
+    except Exception as ex:
+        _audit_failure(audit, stage="build", source="*", chunk_index=None,
+                       attempt=None, kind="exception", error=ex)
+        audit["status"] = "failed"
+        audit["summary"] = {"events": len(audit["events"]), "fatal": str(ex)[:1000]}
+        _save_build_audit(audit)
+        raise

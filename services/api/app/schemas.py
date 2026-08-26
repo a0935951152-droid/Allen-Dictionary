@@ -41,7 +41,7 @@ class ReportItem(BaseModel):
 
 
 class SpanReports(BaseModel):
-    """三份證據報告 → gemma 彙整仲裁（不信自報 conf，看三路一致性）。§4.1 精修輸入。"""
+    """三份證據報告 → Qwen 彙整仲裁（不信自報 conf，看三路一致性）。§4.1 精修輸入。"""
     acoustic: list[ReportItem] = Field(default_factory=list)      # 聲學：IPA→CAG 同音正解候選
     semantic: list[ReportItem] = Field(default_factory=list)      # 語意：心智圖/wiki 接地支持的候選
     crosslingual: list[ReportItem] = Field(default_factory=list)  # 跨語：多語平行交叉印證的候選
@@ -58,9 +58,9 @@ class SpanNode(BaseModel):
     grounding: Grounding = Field(default_factory=Grounding)
     decision: DecisionInfo = Field(default_factory=DecisionInfo)
     coarse: bool = False               # 粗修（§4.1 步驟②：錨點高信心同音錯，已直接改）
-    refined: bool = False              # 精修（§4.1 步驟③：7B 受限驗證改的）
+    refined: bool = False              # 精修（§4.1 步驟③：Qwen 受限驗證改的）
     reports: SpanReports = Field(default_factory=SpanReports)   # 規則證據（聲學 IPA + 局部語意命中）
-    rule_hit: bool = False             # 局部語意語音命中：聲學候選 且 局部語意撐住（gemma 判斷前的規則閘）
+    rule_hit: bool = False             # 局部語意語音命中：聲學候選 且 局部語意撐住（Qwen 判斷前的規則閘）
 
     @property
     def current(self) -> Optional[str]:
@@ -137,4 +137,4 @@ class TermEntry(BaseModel):
 class Classification(BaseModel):
     class_id: str
     name: str
-    prompt: str = ""                    # 分類依據（注入 breeze 的提示詞）
+    prompt: str = ""                    # 分類依據（注入 Qwen 的提示詞）

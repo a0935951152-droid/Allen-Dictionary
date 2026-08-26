@@ -120,8 +120,8 @@
 <script>
 const $=s=>document.querySelector(s);
 let CUR=null,BATCH=null,SPANS=[],ACTIVE='s0',OPEN=null,MC=400;
-// 收攏管線：① 匯入 ② 切分 ③ 局部語意語音命中(規則證據) ④ gemma判斷(四態) ⑤ 人工修正(收第④態) ⑥ 回灌/匯出；⚙ 參數(唯讀)
-const STN=[['s0','① 匯入'],['s1','② 切分'],['s2','③ 局部語意語音命中'],['s3','④ gemma判斷'],['s4','⑤ 人工修正'],['s5','⑥ 回灌/匯出'],['sp','⚙ 參數']];
+// 收攏管線：① 匯入 ② 切分 ③ 局部語意語音命中(規則證據) ④ Qwen判斷(四態) ⑤ 人工修正(收第④態) ⑥ 回灌/匯出；⚙ 參數(唯讀)
+const STN=[['s0','① 匯入'],['s1','② 切分'],['s2','③ 局部語意語音命中'],['s3','④ Qwen判斷'],['s4','⑤ 人工修正'],['s5','⑥ 回灌/匯出'],['sp','⚙ 參數']];
 
 function toast(m,k=""){const e=document.createElement("div");e.className="tmsg "+k;e.textContent=m;$("#toast").appendChild(e);setTimeout(()=>e.remove(),2800);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
@@ -131,7 +131,7 @@ function busyShow(label){_busyN++;$("#busyLabel").textContent=label||"處理中�
 function busyHide(){_busyN=Math.max(0,_busyN-1);if(_busyN===0){clearInterval(_busyT);$("#busy").classList.remove("open");}}
 async function call(fn,ok,label){busyShow(label||"處理中…");try{const r=await fn();if(ok)toast(ok,"ok");return r;}catch(e){toast(String(e.message||e).slice(0,150),"err");throw e;}finally{busyHide();}}
 
-async function health(){try{const h=await api("/health");const s=h.services||{};$("#badges").innerHTML=[["api",h.api],["gemma(窗口)",s.llm],["embed",s.embed],["ner",s.ner]].map(([k,v])=>`<span class="badge ${v?'ok':'no'}">${k} ${v?'✓':'✗'}</span>`).join("");}catch(e){$("#badges").innerHTML='<span class="badge no">api ✗</span>';}}
+async function health(){try{const h=await api("/health");const s=h.services||{};$("#badges").innerHTML=[["api",h.api],["Qwen Q2",s.llm],["embed",s.embed],["ner",s.ner]].map(([k,v])=>`<span class="badge ${v?'ok':'no'}">${k} ${v?'✓':'✗'}</span>`).join("");}catch(e){$("#badges").innerHTML='<span class="badge no">api ✗</span>';}}
 async function loadBatches(){const {batches}=await api("/api/batches");$("#batchSel").innerHTML=(batches.map(b=>`<option ${b===CUR?'selected':''}>${b}</option>`).join(""))||'<option value="">（無批次）</option>';if(!CUR&&batches.length)CUR=batches[0];if(CUR)await selectBatch(CUR);else{BATCH=null;SPANS=[];renderAll();}}
 async function selectBatch(b){CUR=b;if(!b){BATCH=null;SPANS=[];return renderAll();}BATCH=await api(`/api/batches/${b}`);SPANS=await api(`/api/batches/${b}/spans`);renderAll();}
 async function reload(){if(!CUR)return;BATCH=await api(`/api/batches/${CUR}`);SPANS=await api(`/api/batches/${CUR}/spans`);renderAll();if(OPEN)renderSpanDrawer();}
@@ -253,7 +253,7 @@ function pLocate(){const c=counts();const list=[...SPANS].sort((a,b)=>quad(a)-qu
     <div style="font-size:18px;font-weight:700;color:${col}">${qc[q]}</div><div style="font-weight:600;color:${col}">${n}</div><div class="muted" style="font-size:11px">${d}</div></div>`;};
   return `<div class="panel">
   <h2>③ 局部語意語音命中　<span class="stat">偵測 <b>${c.spans}</b> · ①修候選 <b style="color:var(--green)">${qc[1]}</b></span></h2>
-  <p class="hint">兩軸<b>並行</b>判讀：<b>IPA命中</b>(音，CAG音近召回) × <b>語意撐</b>(意，候選 vs 局部句排名制)。語意只對音召回的候選表態、不自己生字。不改字，交 ④ gemma 拍板。</p>
+  <p class="hint">兩軸<b>並行</b>判讀：<b>IPA命中</b>(音，CAG音近召回) × <b>語意撐</b>(意，候選 vs 局部句排名制)。語意只對音召回的候選表態、不自己生字。不改字，交 ④ Qwen 拍板。</p>
   <div style="margin:8px 0">
     <div style="display:flex;gap:6px;margin-bottom:4px"><div style="flex:0 0 70px"></div><div style="flex:1;text-align:center;font-size:12px" class="muted">語意撐 ✓</div><div style="flex:1;text-align:center;font-size:12px" class="muted">語意未撐 ✗</div></div>
     <div style="display:flex;gap:6px;align-items:stretch;margin-bottom:6px"><div style="flex:0 0 70px;display:flex;align-items:center;font-size:12px" class="muted">IPA命中 ✓</div>${cell(1)}${cell(2)}</div>
@@ -267,7 +267,7 @@ function pLocate(){const c=counts();const list=[...SPANS].sort((a,b)=>quad(a)-qu
     return `<tr onclick="openSpan('${s.span_id}')" style="cursor:pointer"><td>${qbadge(quad(s))}</td><td><b>${esc(orig)}</b></td><td style="font-size:12px">${acT}</td><td style="font-size:12px">${seT}</td><td class="muted" style="font-size:11px">${esc(s.seg_id||'')}</td></tr>`;
   }).join("")||'<tr><td colspan="5" class="muted">先切分再跑偵測。</td></tr>'}</tbody></table></div>`;}
 
-/* span 表（gemma判斷用） */
+/* span 表（Qwen判斷用） */
 function srow(s){const h=s.history||[];const orig=h.length?h[0].value:'';const cur=h.length?h[h.length-1].value:'';
   const fin=(s.decision&&s.decision.correct)||cur;
   const tag=(s.decision?.to==='auto'&&s.review==='錯字')?'<span class="rv 錯字">修✓</span>':s.decision?.to==='human'?'<span class="rv 存疑" style="background:#2a2410;color:var(--yellow)">待人工</span>':s.review==='正確'?'<span class="rv 正確">維持</span>':'<span class="rv 存疑">未判</span>';
@@ -275,13 +275,13 @@ function srow(s){const h=s.history||[];const orig=h.length?h[0].value:'';const c
   const arrow=changed?`${esc(orig)} <span class="muted">→</span> <b>${esc(fin)}</b>`:`<b>${esc(orig)}</b>`;
   return `<tr onclick="openSpan('${s.span_id}')" style="cursor:pointer"><td>${arrow}</td><td class="muted" style="font-size:11px">${esc((s.context||'').replace(/[\[\]]/g,'').slice(0,40))}</td><td>${tag}</td><td class="muted" style="font-size:11px">${esc(s.seg_id||'')}</td></tr>`;}
 
-/* ④ gemma判斷（四態：修 / 維持 / 待人工） */
+/* ④ Qwen判斷（四態：修 / 維持 / 待人工） */
 function pJudge(){const c=counts();const list=[...SPANS].sort((a,b)=>rank(b)-rank(a));return `<div class="panel">
-  <h2>④ gemma判斷　<span class="stat">修 <b style="color:var(--green)">${c.fix}</b> · 維持 <b class="muted">${c.keep}</b> · 待人工 <b style="color:var(--yellow)">${c.manual}</b></span></h2>
-  <p class="hint">吃規則證據(聲學+局部語意命中)＋平行多語 → gemma 判 拋棄?/跨語命中?。四態：命中+不拋棄=<b style="color:var(--green)">修</b>；命中+拋棄/不命中+拋棄=維持；不命中+不拋棄(跨語救回)=<b style="color:var(--yellow)">待人工</b>。需先 ③。<br>
-  Gemma 不常駐：按下按鈕由主機代理開<b>獨佔窗口</b>（收GPU→載Gemma→判<b>所有批次</b>存疑→換回收斂棧，載入 ~數分）。</p>
-  <div class="fl"><button class="primary" onclick="doJudgeOps()" id="judgeBtn" ${c.spans?'':'disabled'}>🤖 判官出動（Gemma 獨佔窗口）</button>
-    <button class="sm" onclick="doJudge()" title="不開窗口、直接打判官 API：僅在 Gemma 窗口已開著（或除錯）時可用，平時 LLM 不常駐會失敗">本批直判（窗口開著才可用）</button>
+  <h2>④ Qwen判斷　<span class="stat">修 <b style="color:var(--green)">${c.fix}</b> · 維持 <b class="muted">${c.keep}</b> · 待人工 <b style="color:var(--yellow)">${c.manual}</b></span></h2>
+  <p class="hint">吃規則證據(聲學+局部語意命中)＋平行多語 → Qwen 判 拋棄?/跨語命中?。四態：命中+不拋棄=<b style="color:var(--green)">修</b>；命中+拋棄/不命中+拋棄=維持；不命中+不拋棄(跨語救回)=<b style="color:var(--yellow)">待人工</b>。需先 ③。<br>
+  Qwen3.8-27B Q2_K_L 常駐；按鈕由主機代理使用 4 個 slot 判<b>所有批次</b>存疑。</p>
+  <div class="fl"><button class="primary" onclick="doJudgeOps()" id="judgeBtn" ${c.spans?'':'disabled'}>🤖 判官出動（Qwen Q2）</button>
+    <button class="sm" onclick="doJudge()" title="直接呼叫常駐 Qwen，只判目前批次">本批直判（直接呼叫）</button>
     <span class="muted" style="font-size:12px">${c.hits||c.spans?'':'⚠ 先跑 ③ 產生候選'}</span></div>
   <div id="opsWrap" style="display:none;margin:6px 0 10px">
     <div style="height:7px;background:#1d2330;border-radius:4px;overflow:hidden">
@@ -289,16 +289,16 @@ function pJudge(){const c=counts();const list=[...SPANS].sort((a,b)=>rank(b)-ran
     <div id="opsPhase" class="muted" style="font-size:12px;margin-top:3px"></div>
   </div>
   <table><thead><tr><th>原詞 → 結果</th><th>上下文</th><th>狀態</th><th>chunk</th></tr></thead>
-  <tbody>${list.map(srow).join("")||'<tr><td colspan="4" class="muted">先跑 ③ 再跑 gemma判斷。</td></tr>'}</tbody></table></div>`;}
+  <tbody>${list.map(srow).join("")||'<tr><td colspan="4" class="muted">先跑 ③ 再跑 Qwen判斷。</td></tr>'}</tbody></table></div>`;}
 
-/* ⑤ 人工修正（只收 gemma 判第④態：規則沒撐、跨語救回） */
+/* ⑤ 人工修正（只收 Qwen 判第④態：規則沒撐、跨語救回） */
 function pManual(){const c=counts();const list=SPANS.filter(s=>s.decision?.to==='human');return `<div class="panel">
   <h2>⑤ 人工修正　<span class="stat">待人工 <b style="color:var(--yellow)">${c.manual}</b></span></h2>
-  <p class="hint">gemma 判為第④態（規則沒撐、靠跨語救回）的詞，<b>不自動改</b>。逐一檢視上下文與建議候選，人工拍板（點開抽屜改字）。</p>
+  <p class="hint">Qwen 判為第④態（規則沒撐、靠跨語救回）的詞，<b>不自動改</b>。逐一檢視上下文與建議候選，人工拍板（點開抽屜改字）。</p>
   <table><thead><tr><th>原詞 → 建議</th><th>上下文</th><th>chunk</th></tr></thead>
   <tbody>${list.map(s=>{const h=s.history||[],orig=h.length?h[0].value:'';const sug=s.decision?.correct||'';
     return `<tr onclick="openSpan('${s.span_id}')" style="cursor:pointer;background:#2a2410"><td>${esc(orig)} <span class="muted">→</span> <b style="color:var(--yellow)">${esc(sug)}</b></td><td class="muted" style="font-size:12px">${esc((s.context||'').replace(/[\[\]]/g,'').slice(0,60))}</td><td class="muted" style="font-size:11px">${esc(s.seg_id||'')}</td></tr>`;
-  }).join("")||'<tr><td colspan="3" class="muted">無待人工項目（gemma 已自動處理完，或尚未跑 ④）。</td></tr>'}</tbody></table></div>`;}
+  }).join("")||'<tr><td colspan="3" class="muted">無待人工項目（Qwen 已自動處理完，或尚未跑 ④）。</td></tr>'}</tbody></table></div>`;}
 
 /* ── 動作 ── */
 async function newBatch(){const id=prompt("batch_id：","evt_"+Date.now().toString().slice(-6));if(!id)return;await call(()=>api("/api/batches","POST",{batch_id:id,domain:""}),"已建立批次");CUR=id;ACTIVE='s0';await loadBatches();}
@@ -314,12 +314,12 @@ async function doIngest(){const t=$("#paste").value.trim();if(!t)return toast("�
 async function saveMeta(){await call(()=>api(`/api/batches/${CUR}/meta`,"PATCH",{meeting_date:readDate('meeting'),produced_date:readDate('produced'),origin:$("#m_origin").value.trim()}),"已存");await reload();}
 async function doSegment(){const el=$("#mc");const mc=(el&&parseInt(el.value))||MC||400;MC=mc;await call(()=>api(`/api/batches/${CUR}/segment?max_chars=${mc}`,"POST"),"已切分","智慧切塊中…");ACTIVE='s2';await reload();}
 async function doLocate(){const r=await call(()=>api(`/api/batches/${CUR}/ground_context`,"POST"),null,"偵測 + 局部語意語音中…");toast(`偵測 ${r.spans} · 規則命中 ${r.rule_hits}`,"ok");ACTIVE='s2';await reload();}
-async function doJudge(){const r=await call(()=>api(`/api/batches/${CUR}/coarse_fix`,"POST"),null,"gemma 判斷中…");toast(`修 ${r.fix} · 維持 ${r.keep} · 待人工 ${r.manual}`,"ok");ACTIVE='s3';await reload();}
+async function doJudge(){const r=await call(()=>api(`/api/batches/${CUR}/coarse_fix`,"POST"),null,"Qwen 判斷中…");toast(`修 ${r.fix} · 維持 ${r.keep} · 待人工 ${r.manual}`,"ok");ACTIVE='s3';await reload();}
 async function doJudgeOps(){const b=$("#judgeBtn");if(b)b.disabled=true;
   try{const r=await fetch("/api/ops/judge",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});
     if(!r.ok){toast(await r.text(),"err");if(b)b.disabled=false;return;}
     const w=$("#opsWrap");if(w)w.style.display="block";
-    toast("已排入 Gemma 獨佔窗口（載入 ~數分，請留在此頁）","ok");
+    toast("已排入 Qwen 判官佇列（請留在此頁）","ok");
     let last="";
     while(true){await new Promise(s=>setTimeout(s,3000));
       let st;try{st=await fetch("/api/ops/status").then(r=>r.json());}catch(e){continue;}
@@ -354,7 +354,7 @@ function findSpan(id){return SPANS.find(s=>s.span_id===id);}
 function openSpan(id){OPEN=id;renderSpanDrawer();$("#drawer").classList.add("open");$("#ov").classList.add("open");}
 function closeDrawer(){OPEN=null;$("#drawer").classList.remove("open");$("#ov").classList.remove("open");}
 function renderSpanDrawer(){const s=findSpan(OPEN);if(!s){closeDrawer();return;}const h=s.history||[];const orig=h.length?h[0].value:'';const cur=h.length?h[h.length-1].value:'';const fin=(s.decision&&s.decision.correct)||cur;
-  const tag=(s.decision?.to==='auto'&&s.review==='錯字')?'修✓（規則命中+gemma確認）':s.decision?.to==='human'?'待人工（規則沒撐、跨語救回）':s.review==='正確'?'維持原樣':'未判（待 gemma）';
+  const tag=(s.decision?.to==='auto'&&s.review==='錯字')?'修✓（規則命中+Qwen確認）':s.decision?.to==='human'?'待人工（規則沒撐、跨語救回）':s.review==='正確'?'維持原樣':'未判（待 Qwen）';
   const histRows=h.map(x=>`<div><span class="k">${x.by==='human'?'✎人工':'model·'+x.iter}</span>　${esc(x.value)}</div>`).join("")||'—';
   const ac=s.reports?.acoustic||[],se=s.reports?.semantic||[];
   const acT=ac.map(x=>`${esc(x.candidate)} <span class="muted">${esc(x.evidence)}</span>`).join('、')||'—';

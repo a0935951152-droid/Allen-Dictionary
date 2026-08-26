@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """站台儀表板全流程 e2e（離線）：建批→ingest→segment→分類→review(r1)→converge→ground→commit→sync→rollback。
-用法：python3 scripts/e2e_dashboard.py（需先 `dic up`，會等 breeze 就緒）。"""
+用法：python3 scripts/e2e_dashboard.py（需先 `dic up`，會等 Qwen Q2 就緒）。"""
 import json, time, urllib.request, urllib.error
 BASE = "http://localhost:8080"
 
@@ -15,7 +15,7 @@ def req(method, path, body=None, max_time=120):
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()
 
-# 1) 等 breeze(llm) 就緒
+# 1) 等 Qwen(llm) 就緒
 h = None
 for i in range(72):
     _, h = req("GET", "/health")

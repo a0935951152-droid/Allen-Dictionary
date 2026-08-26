@@ -1,14 +1,14 @@
-"""gemma 判斷（階段②，取代舊「粗修+精修」）：吃規則證據（聲學+局部語意命中）＋平行多語句，
-gemma 判兩件事 → 拋棄？／跨語命中？，再依**四態決策**落地。
+"""Qwen 判斷（階段②，取代舊「粗修+精修」）：吃規則證據（聲學+局部語意命中）＋平行多語句，
+Qwen 判兩件事 → 拋棄？／跨語命中？，再依**四態決策**落地。
 
-四態 = (規則語意+聲學命中 rule_hit) × (gemma 拋棄 abandon)：
-  ① 命中 + 不拋棄  → 修（auto，gemma 確認規則方向）
-  ② 命中 + 拋棄    → 維持（auto，gemma 否決規則）
+四態 = (規則語意+聲學命中 rule_hit) × (Qwen 拋棄 abandon)：
+  ① 命中 + 不拋棄  → 修（auto，Qwen 確認規則方向）
+  ② 命中 + 拋棄    → 維持（auto，Qwen 否決規則）
   ③ 不命中 + 拋棄  → 維持（auto）
-  ④ 不命中 + 不拋棄 → 人工修正（規則沒撐、但 gemma 靠跨語救回 → 交人，永不自動）
+  ④ 不命中 + 不拋棄 → 人工修正（規則沒撐、但 Qwen 靠跨語救回 → 交人，永不自動）
 
-治理：gemma 能確認/否決，但**不能在規則沒接地時自動造修正**（④ 一律走人）。
-「沒跨語命中就拋棄」：規則沒撐且跨語也不命中 → 強制 abandon（gemma 純語境臆測不足以救）。
+治理：Qwen 能確認/否決，但**不能在規則沒接地時自動造修正**（④ 一律走人）。
+「沒跨語命中就拋棄」：規則沒撐且跨語也不命中 → 強制 abandon（Qwen 純語境臆測不足以救）。
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from ..schemas import HistoryItem, Segment, SpanNode
 from . import lexicon, reports
 from .variants import flatten
 
-JUDGE_CONCURRENCY = settings.judge_concurrency   # gemma 併發（vLLM 連續批次；env JUDGE_CONCURRENCY）
+JUDGE_CONCURRENCY = settings.judge_concurrency   # Qwen 併發（llama.cpp slots；env JUDGE_CONCURRENCY）
 
 
 def _keep(span: SpanNode, original: str) -> str:
@@ -49,7 +49,7 @@ def _fix(span: SpanNode, correct: str) -> str:
 
 
 def _manual(span: SpanNode, correct: str) -> str:
-    """人工修正（④）：規則沒撐、gemma 靠跨語救回 → 建議候選但交人，不自動改。"""
+    """人工修正（④）：規則沒撐、Qwen 靠跨語救回 → 建議候選但交人，不自動改。"""
     span.review = "存疑"           # type: ignore[assignment]
     span.decision.to = "human"
     span.decision.correct = correct      # 給人參考的建議
@@ -75,7 +75,7 @@ def _render_ground(seg: Segment, cap: int = 12) -> str:
 
 
 async def judge_span(span: SpanNode, seg: Segment) -> str:
-    """單 span：gemma 雙輸出(abandon/xling) → 四態。回 'fix'|'keep'|'manual'。"""
+    """單 span：Qwen 雙輸出(abandon/xling) → 四態。回 'fix'|'keep'|'manual'。"""
     original, _ = reports.span_words(span)
     cand = (span.grounding.candidates or [None])[0] if span.grounding else None
     hit = span.rule_hit

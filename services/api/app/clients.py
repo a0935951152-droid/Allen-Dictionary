@@ -1,16 +1,19 @@
-"""模型服務 client：判官 LLM(vLLM)、嵌入/重排(TEI)。皆走容器內部網路。"""
+"""模型服務 client：Qwen 判官、TEI 嵌入、NER、SaT。皆走容器內部網路。"""
 from __future__ import annotations
 
 import httpx
 
 from .config import settings
 
-_timeout = httpx.Timeout(120.0, connect=10.0)
+_timeout = httpx.Timeout(120.0, connect=10.0)  # TEI/NER/SaT
+_llm_timeout = httpx.Timeout(float(settings.llm_timeout_seconds), connect=10.0)
 
 
-# ── 判官 LLM（vLLM OpenAI 相容）────────────────────────────────
-async def judge_chat(prompt: str, *, max_tokens: int = 128, temperature: float = 0.0) -> str:
-    async with httpx.AsyncClient(timeout=_timeout) as c:
+# ── 判官 LLM（llama.cpp OpenAI 相容）────────────────────────────────
+async def judge_chat_result(prompt: str, *, max_tokens: int = 128,
+                            temperature: float = 0.0) -> dict:
+    """回內容與 finish_reason/usage；build audit 用它辨識 length 截斷，不能只看殘缺文字。"""
+    async with httpx.AsyncClient(timeout=_llm_timeout) as c:
         r = await c.post(
             f"{settings.llm_base_url}/chat/completions",
             json={
@@ -21,25 +24,22 @@ async def judge_chat(prompt: str, *, max_tokens: int = 128, temperature: float =
             },
         )
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
+        data = r.json()
+        choice = data["choices"][0]
+        return {"content": (choice["message"].get("content") or "").strip(),
+                "finish_reason": choice.get("finish_reason"), "usage": data.get("usage") or {}}
+
+
+async def judge_chat(prompt: str, *, max_tokens: int = 128, temperature: float = 0.0) -> str:
+    """既有呼叫介面；需要判斷截斷的流程改用 judge_chat_result。"""
+    return (await judge_chat_result(prompt, max_tokens=max_tokens,
+                                    temperature=temperature))["content"]
 
 
 # ── 嵌入（TEI /embed）──────────────────────────────────────────
 async def embed(texts: list[str]) -> list[list[float]]:
     async with httpx.AsyncClient(timeout=_timeout) as c:
         r = await c.post(f"{settings.embed_url}/embed", json={"inputs": texts})
-        r.raise_for_status()
-        return r.json()
-
-
-# ── 重排（TEI /rerank）─────────────────────────────────────────
-async def rerank(query: str, texts: list[str]) -> list[dict]:
-    """回傳 [{index, score}, ...]，已依 score 由高到低排序。"""
-    async with httpx.AsyncClient(timeout=_timeout) as c:
-        r = await c.post(
-            f"{settings.rerank_url}/rerank",
-            json={"query": query, "texts": texts, "return_text": False},
-        )
         r.raise_for_status()
         return r.json()
 
@@ -77,7 +77,6 @@ async def health() -> dict:
         for name, url in (
             ("llm", settings.llm_base_url.rsplit("/v1", 1)[0] + "/health"),
             ("embed", f"{settings.embed_url}/health"),
-            ("rerank", f"{settings.rerank_url}/health"),
             ("ner", f"{settings.ner_url}/health"),
             ("sat", f"{settings.sat_url}/health"),
         ):

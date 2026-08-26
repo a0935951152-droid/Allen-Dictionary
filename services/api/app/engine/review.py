@@ -45,7 +45,7 @@ async def make_segments_offsets(raw_text: str, max_chars: int = 400) -> list[Seg
 
 
 def _extract_json(text: str):
-    """從 breeze 回覆抽出第一段 JSON（容忍 ```json 包裹/前後雜訊）。失敗回 None。"""
+    """從 Qwen 回覆抽出第一段 JSON（容忍 ```json 包裹/前後雜訊）。失敗回 None。"""
     if not text:
         return None
     m = re.search(r"\{.*\}|\[.*\]", text, re.S)
@@ -78,7 +78,7 @@ async def smart_organize(raw_text: str, filename: str = "") -> dict:
 
 # ── 偵測（判定側主線）：ner 抓 span → IPA 對 CAG 索引比對（純 CPU，detect→retrieve，採 Apple 2409.15353）──
 # NER＝可錯的「定位器」（圈出像專名的 span，可以錯）；對 CAG 過 IPA 檢索撈音近正解＝「認對」。
-# 不走 breeze 生成/多輪收斂（已移除）；此關純 ner(CPU)+IPA(CPU)，認對交 ground_context/判官。
+# 此偵測關不呼叫 LLM；純 ner(CPU)+IPA(CPU)，認對交 ground_context/判官。
 def _mk_span(seg_id: str, j: int, w: str, suggest: str, typ: str,
              ctx_text: str, cands: list[str], src: str) -> SpanNode:
     ctx = ctx_text.replace(w, f"[{w}]", 1)

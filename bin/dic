@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # dic — 收斂式字典封閉系統控制（無參數進選單）
-# 架構：知識庫+wiki 跑一輪當 DB（build/wiki/mind）→ 收斂棧常開（up）→ 判官 Gemma 該出動才拉（judge）
-# 日常： up 收斂棧(DB+前端+管線：embed+ner+sat+api) · api 重建api · status 健康 · logs 日誌 · down 全下
-# 建置（Gemma 獨佔窗口，選單一次拉、跑完自動換回）： build 知識庫 · judge 判官批次 · wiki wiki大庫 · mind 心智圖嵌入
-# ⚠ Breeze-7B(vllm) / tei-rerank 已淘汰不再啟動（判官全走 Gemma 獨佔窗口；rerank 引擎未用）。compose 定義保留僅供回退。
+# 架構：Qwen3.8-27B Q2_K_L（build＋判官共用，4 slots×32K）與 bge-m3、NER、SaT、API 同時常駐。
+# 日常： up 全棧 · api 重建api · status 健康 · logs 日誌 · down 全下
+# 建置： build 知識庫 · judge 判官批次 · wiki wiki大庫 · mind 心智圖嵌入
+# 舊 LLM 與 reranker 已移除，不在 Compose 或啟動鏈中。
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"   # readlink -f：經 symlink 呼叫也定位專案根
@@ -12,15 +12,12 @@ PORT="$(grep -E '^API_PORT=' "$DIR/.env" 2>/dev/null | cut -d= -f2)"; PORT="${PO
 LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"; LAN_IP="${LAN_IP:-localhost}"
 c(){ printf "\033[%sm%s\033[0m\n" "$1" "$2"; }
 
-# 服務分組：日常收斂棧（DB/前端＝api、切分=sat、嵌入接地=tei-embed、偵測=ner）常開；
-# 判官/知識側建置（vllm-build=Gemma）走 build profile 獨佔窗口，只由 build/judge 一次拉；cloudflared 走 tunnel profile。
-# DEPRECATED_SVC 已淘汰（7B 等小模型不用了）：不啟動、status 標記；down/建置窗口仍會清它們。
-PIPE_SVC=(tei-embed ner sat api)          # dic up：收斂管線日常棧（唯一 GPU＝tei-embed ~2G）
-DEPRECATED_SVC=(vllm tei-rerank)          # ⚠ 已淘汰：Breeze-7B(判官已改 Gemma 獨佔) + rerank(引擎未用)
+# 服務分組：Qwen 與接地/切分/API 全部常駐；cloudflared 仍為選配。
+PIPE_SVC=(qwen tei-embed ner sat api)
 CPU_SVC=(ner sat api)
-declare -A CNAME=( [vllm]=dict-vllm [tei-embed]=dict-tei-embed [tei-rerank]=dict-tei-rerank \
+declare -A CNAME=( [qwen]=dict-qwen-q2 [tei-embed]=dict-tei-embed \
                    [ner]=dict-ner [sat]=dict-sat [api]=dict-api \
-                   [cloudflared]=dict-cloudflared [vllm-build]=dict-vllm-build )
+                   [cloudflared]=dict-cloudflared )
 
 ensure_env(){
   [ -f "$DIR/.env" ] || cp "$DIR/.env.example" "$DIR/.env"
@@ -38,16 +35,14 @@ wait_api(){
   done; return 1
 }
 
-cmd_up(){   # 日常預設：只拉 DB+前端+收斂管線；LLM 一律不常駐（判官/建庫走獨佔窗口）
+cmd_up(){
   ensure_env
-  c 36 "▶ 收斂棧：${PIPE_SVC[*]}（DB/前端/切分/嵌入/偵測；LLM 不常駐）…"
-  "${DC[@]}" stop "${DEPRECATED_SVC[@]}" 2>/dev/null || true    # 舊 runtime 若在跑，順手收掉
-  "${DC[@]}" up -d --build --no-deps "${PIPE_SVC[@]}"
+  c 36 "▶ 啟動完整常駐棧：${PIPE_SVC[*]}（Qwen 4 slots×32K + bge-m3 + NER + SaT + API）…"
+  "${DC[@]}" up -d --build "${PIPE_SVC[@]}"
   wait_api || true
   agent_up
   echo; front_urls
   echo "  服務健康：$(curl -fsS "http://localhost:$PORT/health" 2>/dev/null || echo '{}')"
-  echo "  （llm=false 為預期：LLM 不常駐。判官批次 → dic judge 或前端按鈕；知識庫建置 → dic build 或前端按鈕）"
 }
 
 cmd_cpu(){
@@ -56,8 +51,8 @@ cmd_cpu(){
   "${DC[@]}" up -d --build --no-deps "${CPU_SVC[@]}"
   wait_api || true
   echo; front_urls
-  echo "  ⚠ 未起 GPU 服務時：判官 LLM/嵌入/重排不可用（health 對應項 false）；SaT 切分/IPA/前端仍可用。"
-  echo "  需要嵌入接地時起收斂棧： dic up"
+  echo "  ⚠ 未起 GPU 服務時：判官 LLM/嵌入不可用（health 對應項 false）；SaT 切分/IPA/前端仍可用。"
+  echo "  需要完整服務時起常駐棧： dic up"
 }
 
 cmd_api(){   # 只重建 api（改 app/ 程式碼後最常用；不動 GPU 與其他容器）
@@ -81,15 +76,15 @@ cmd_down(){
   c 32 "✓ 已關閉全部。"
 }
 
-# ── Gemma 獨佔窗口（build/judge 共用；CLI 與 ops 代理都走這組）─────────
-api_up(){ curl -fsS "http://localhost:$PORT/health" >/dev/null 2>&1 || { c 31 "✗ api 未起，先： dic up"; exit 1; }; }
+# ── Qwen 常駐執行（build / judge 共用同一服務）────────────────────
+api_up(){ curl -fsS "http://localhost:$PORT/health" >/dev/null 2>&1 || { c 31 "✗ 完整棧未就緒，先執行： dic up"; exit 1; }; }
 OPS_DIR="$DIR/data/ops"
-ST_FILE=""; ST_ID=""; ST_OP=""; ST_STEPS=5    # ST_FILE 空＝CLI 只印；agent 模式指向 status.json
-st(){  # st <state> <step> <訊息>：印出＋（agent 模式）原子回寫 status.json 供前端輪詢
+ST_FILE=""; ST_ID=""; ST_OP=""; ST_STEPS=2
+st(){
   local state="$1" step="$2" msg="$3"
   c 36 "  $msg"
   [ -z "$ST_FILE" ] && return 0
-  python3 - "$ST_FILE" "$ST_ID" "$ST_OP" "$state" "$step" "$ST_STEPS" "$msg" <<'PY' 2>/dev/null || true
+  python3 - "$ST_FILE" "$ST_ID" "$ST_OP" "$state" "$step" "$ST_STEPS" "$msg" <<'PY2' 2>/dev/null || true
 import json, os, sys, time
 f, i, op, state, step, steps, msg = sys.argv[1:8]
 try:
@@ -104,59 +99,56 @@ d.setdefault("log", []).append(msg)
 tmp = f + ".tmp"
 json.dump(d, open(tmp, "w"), ensure_ascii=False)
 os.replace(tmp, f)
-PY
+PY2
 }
-build_model(){  # 讀 .env 的 Gemma 模型路徑；不存在回非零
-  local mr bm; mr="$(grep -E '^MODELS_ROOT=' "$DIR/.env" | cut -d= -f2 | awk '{print $1}')"
-  bm="$(grep -E '^BUILD_MODEL_DIR=' "$DIR/.env" | cut -d= -f2 | awk '{print $1}')"
-  BM_NAME="$bm"; [ -d "$mr/$bm" ]
+qwen_model(){
+  local qm
+  qm="$(grep -E '^QWEN_MODEL_PATH=' "$DIR/.env" | cut -d= -f2- | awk '{print $1}')"
+  QWEN_NAME="$(basename "$qm")"
+  [ -f "$qm" ]
 }
-win_open(){  # 獨佔窗口開：停收斂棧 GPU＋舊 runtime → 起 Gemma → 等 healthy（回非零＝沒起來）
-  st running 1 "① 停收斂棧 GPU＋舊 runtime 釋放顯存…"
-  "${DC[@]}" stop vllm tei-embed tei-rerank
-  st running 2 "② 起 Gemma（$BM_NAME，載入 ~數分）…"
-  "${DC[@]}" --profile build rm -f vllm-build 2>/dev/null || true   # 清殘骸（舊容器掛失效網路會起不來）
-  "${DC[@]}" --profile build up -d vllm-build
-  for i in $(seq 1 120); do [ "$(hstat dict-vllm-build)" = healthy ] && { wait_api || true; return 0; }; sleep 5; done
+qwen_ready(){
+  for i in $(seq 1 180); do
+    [ "$(hstat dict-qwen-q2)" = healthy ] && return 0
+    sleep 5
+  done
   return 1
 }
-win_close(){ # 獨佔窗口關：停/清 Gemma → 換回收斂棧
-  st running 4 "④ 停 Gemma、換回收斂棧（tei-embed）…"
-  "${DC[@]}" --profile build stop vllm-build; "${DC[@]}" --profile build rm -f vllm-build
-  "${DC[@]}" up -d --no-deps tei-embed; wait_api || true
+stack_ready(){
+  qwen_model || { st error 0 "✗ Qwen 模型不存在（見 .env QWEN_MODEL_PATH）"; return 1; }
+  st running 1 "① 確認 Qwen 常駐棧（$QWEN_NAME；4 slots×32K）…"
+  "${DC[@]}" up -d --build qwen tei-embed ner sat api
+  qwen_ready || { st error 1 "✗ Qwen 未能就緒（詳 docker logs dict-qwen-q2）"; return 1; }
+  wait_api || { st error 1 "✗ API 未能就緒（詳 dic logs api）"; return 1; }
 }
-run_build(){  # $1: --clear 或空。知識庫抽取一輪（DB 建置）
-  build_model || { st error 0 "✗ build 模型未下載（見 .env BUILD_MODEL_DIR）"; return 1; }
-  win_open || { st error 2 "✗ Gemma 未能就緒（詳 docker logs dict-vllm-build）"; win_close; return 1; }
+run_build(){
+  stack_ready || return 1
   local body='{"incremental":true}'; [ "${1:-}" = "--clear" ] && body='{"incremental":false,"clear":true}'
-  st running 3 "③ 知識庫抽取（Gemma 多語，長跑）…"
+  st running 2 "② 知識庫抽取（Qwen 多語，長跑）…"
   local out
   if ! out="$(curl -fsS -X POST "http://localhost:$PORT/api/knowledge/build" -H 'Content-Type: application/json' -d "$body")"; then
-    st error 3 "✗ 抽取失敗（詳 dic logs api）"; win_close; return 1
+    st error 2 "✗ 抽取失敗（詳 dic logs api）"; return 1
   fi
   echo "$out"
-  win_close
-  st done 5 "✓ build 完成、已換回收斂棧：${out:0:200}"
+  st done 2 "✓ build 完成：${out:0:200}"
   c 32 "✓ 接著更新接地嵌入： dic mind（或前端）"
 }
-run_judge(){  # 判官批次：判完所有批次的『存疑』span
-  build_model || { st error 0 "✗ 判官模型未下載（見 .env BUILD_MODEL_DIR）"; return 1; }
-  win_open || { st error 2 "✗ Gemma 未能就緒（詳 docker logs dict-vllm-build）"; win_close; return 1; }
-  st running 3 "③ 批次判：對所有 batch 的『存疑』span 跑 gemma 判斷…"
+run_judge(){
+  stack_ready || return 1
+  st running 2 "② 批次判：Qwen 處理所有 batch 的『存疑』span…"
   local out
   if ! out="$(curl -fsS -X POST "http://localhost:$PORT/api/judge_pending")"; then
-    st error 3 "✗ 判官批次失敗（詳 dic logs api）"; win_close; return 1
+    st error 2 "✗ 判官批次失敗（詳 dic logs api）"; return 1
   fi
   echo "$out"
-  win_close
-  st done 5 "✓ 判官批次完成：${out:0:200}（第④態人工清單看前端 ⑤）"
+  st done 2 "✓ 判官批次完成：${out:0:200}（人工清單看前端 ⑤）"
 }
-cmd_build(){ # CLI/選單＝從頭 full rebuild（清快取全抽）；增量建置走前端按鈕（或 dic build --inc）
+cmd_build(){
   ensure_env
   local arg="--clear"; [ "${2:-}" = "--inc" ] && arg=""
   run_build "$arg"
 }
-cmd_judge(){ ensure_env; api_up; run_judge; }
+cmd_judge(){ ensure_env; run_judge; }
 
 # ── ops 代理：監看前端請求檔（api 無 docker 權限＝封閉設計；docker 操作留在主機）──
 agent_alive(){ [ -f "$OPS_DIR/agent.alive" ] && [ $(( $(date +%s) - $(stat -c %Y "$OPS_DIR/agent.alive") )) -lt 15 ]; }
@@ -177,7 +169,7 @@ cmd_agent(){ # 前景代理迴圈：認領 request.json → 跑 build/judge → 
       op="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("op",""))' "$OPS_DIR/request.run" 2>/dev/null || true)"
       arg="$(python3 -c 'import json,sys;print("--clear" if json.load(open(sys.argv[1])).get("clear") else "")' "$OPS_DIR/request.run" 2>/dev/null || true)"
       ST_FILE="$OPS_DIR/status.json"; ST_ID="${id:-op_$(date +%s)}"; ST_OP="${op:-?}"
-      st running 0 "⓪ 收到 ${op} 請求，開獨佔窗口…"
+      st running 0 "⓪ 收到 ${op} 請求，使用常駐 Qwen 執行…"
       case "$op" in
         build) run_build "$arg" || true ;;
         judge) run_judge || true ;;
@@ -195,7 +187,7 @@ agent_down(){
 }
 cmd_wiki(){    # wiki 大庫：解析 zhwiki dump → bge 嵌入 → hnswlib（長跑數十分）
   api_up
-  [ "$(hstat dict-tei-embed)" = healthy ] || { c 31 "✗ tei-embed 未就緒（Gemma 窗口中？）— 先等窗口結束或 dic up"; exit 1; }
+  [ "$(hstat dict-tei-embed)" = healthy ] || { c 31 "✗ tei-embed 未就緒 — 先執行 dic up"; exit 1; }
   c 36 "▶ wiki 大庫建置：解析 → 嵌入 → hnswlib（長跑，~15-30 分）…"
   docker exec dict-api python -m app.engine.wiki_ingest
   docker exec dict-api python -m app.engine.wiki_index
@@ -228,11 +220,8 @@ cmd_status(){
   echo
   c 1 "收斂棧（常開）："
   for s in "${PIPE_SVC[@]}"; do row "$s"; done
-  c 1 "獨佔窗口 / 通道（平時未建立為正常）："
-  row vllm-build
+  c 1 "選配通道（平時未建立為正常）："
   row cloudflared
-  c 1 "已淘汰（不啟動；有跑代表舊 runtime 未收）："
-  for s in "${DEPRECATED_SVC[@]}"; do row "$s"; done
   echo
   local h; h="$(curl -fsS "http://localhost:$PORT/health" 2>/dev/null || echo '')"
   if [ -n "$h" ]; then c 32 "API /health： $h"; else c 31 "API /health： 無回應（api 未起或仍在啟動）"; fi
@@ -271,16 +260,16 @@ menu(){
   local running; running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c '^dict-' || true)
   c 36 "收斂式字典封閉系統 ─────────────────────────"
   echo "GPU ： $(gpu_line)"
-  echo "狀態： ${running}/7 個 dict 容器運行中 | 前端 http://$LAN_IP:$PORT/"
+  echo "狀態： ${running}/5 個核心 dict 容器運行中 | 前端 http://$LAN_IP:$PORT/"
   echo
   c 1 "── 日常（收斂棧常開）──"
-  echo " 1) up      起收斂棧（DB/前端 + 切分 + 嵌入 + 偵測；LLM 不常駐）"
+  echo " 1) up      起完整常駐棧（Qwen + 嵌入 + NER + SaT + API）"
   echo " 2) api     只重建 api（改程式後用；不碰其他容器）"
   echo " 3) status  健康狀態"
   echo " 4) logs    跟看 api 日誌"
   echo " 5) down    全下（含通道）"
-  c 1 "── DB 建置一輪 / 判官出動（Gemma 獨佔窗口，跑完自動換回收斂棧）──"
-  echo " 6) build   知識庫「從頭」全抽（Gemma → 心智圖 + CAG；增量建置用前端按鈕）"
+  c 1 "── DB 建置一輪 / 判官（共用常駐 Qwen）──"
+  echo " 6) build   知識庫「從頭」全抽（Qwen → 心智圖 + CAG；增量建置用前端按鈕）"
   echo " 7) wiki    wiki 大庫建置（dump → 嵌入 → hnswlib，長跑）"
   echo " 8) mind    心智圖實體嵌入（build/wiki 後跑一次）"
   echo " 9) judge   判官批次（判完所有批次的『存疑』span）⚠ 見 TODO 凍結令"
@@ -298,11 +287,11 @@ menu(){
 
 usage(){
   echo "用法： dic {up|api|status|logs|down|build|wiki|mind|judge|cpu|tunnel}（無參數進選單）"
-  echo "  日常： up 收斂棧(embed+ner+sat+api，LLM 不常駐) · api 只重建api · status 健康 · logs [服務] 日誌 · down 全下"
-  echo "  DB／判官（Gemma 獨佔窗口，跑完換回收斂棧）："
+  echo "  日常： up 完整常駐棧(qwen+embed+ner+sat+api) · api 只重建api · status 健康 · logs [服務] 日誌 · down 全下"
+  echo "  DB／判官（共用常駐 Qwen）："
   echo "        build 知識庫從頭全抽（增量→前端按鈕或 --inc） · wiki wiki大庫 · mind 心智圖嵌入 · judge 判官批次(判所有存疑)"
   echo "  其他： cpu 免顯卡降級 · tunnel 公開通道（⚠ 零認證 API，見 審查.md #2）"
-  echo "  ⚠ Breeze-7B/rerank 已淘汰不啟動。管線操作走前端（參數視覺化＝「⚙ 參數」站）/ API（指令.md）"
+  echo "  舊 LLM 與 reranker 已移除。管線操作走前端（參數視覺化＝「⚙ 參數」站）/ API（指令.md）"
 }
 
 case "${1:-}" in
@@ -318,7 +307,7 @@ case "${1:-}" in
   wiki)    cmd_wiki ;;
   mind)    cmd_mind ;;
   agent)   cmd_agent ;;
-  gpu|full) c 33 "⚠ gpu/full 已移除：LLM 不常駐（判官→ dic judge、建庫→ dic build）；收斂棧→ dic up" ;;
+  gpu|full) c 33 "gpu/full 已併入 dic up：Qwen 與完整管線一同常駐" ;;
   ""|menu) menu ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;

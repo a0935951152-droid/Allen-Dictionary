@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
 import json
 import os
 import threading
@@ -37,6 +39,8 @@ _BATCH = 128                       # 每次送 TEI 的條數（短標題，吞�
 
 _lock = threading.Lock()
 _state: dict | None = None          # {"index", "cards":[card], "dim", "n"}
+_process_lock = threading.Lock()
+_process_pool: ProcessPoolExecutor | None = None
 
 
 def _card_text(rec: dict) -> str:
@@ -107,9 +111,7 @@ async def build(batch: int = _BATCH) -> dict:
             "model": "bge-m3", "fields": "title|aliases"}
     with open(_META, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)
-    with _lock:                                # 失效記憶體快取，下次 search 重載
-        global _state
-        _state = None
+    invalidate()                               # parent/worker 都失效，下次 search 載新索引
     return meta
 
 
@@ -165,6 +167,47 @@ def _load() -> dict:
         return _state
 
 
+def load() -> dict:
+    """同步 single-flight 載入；只供獨立 worker process/CLI 使用。"""
+    return _load()
+
+
+def _executor() -> ProcessPoolExecutor:
+    """Wiki 專用單進程：索引載入一次後常駐，且 hnswlib 的 GIL 不會卡住 API process。"""
+    global _process_pool
+    with _process_lock:
+        if _process_pool is None:
+            _process_pool = ProcessPoolExecutor(max_workers=1)
+        return _process_pool
+
+
+def _load_summary() -> dict:
+    st = _load()
+    return {"n": st["n"], "dim": st["dim"]}
+
+
+def _search_many_worker(vectors: list, k: int) -> list[list[dict]]:
+    _load()                                           # 先嚴格冷載；失敗交回 coroutine 降級
+    return [search_vec(vec, k=k) for vec in vectors]
+
+
+async def ensure_loaded() -> dict:
+    """在獨立常駐 process 冷載 6GB HNSW；API event loop/GIL 完全分離。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor(), _load_summary)
+
+
+async def search_many(vectors: list, k: int = 8) -> list[list[dict]]:
+    """一次 IPC 批次查詢 Wiki worker，避免每張 card 各做一次 process 往返。"""
+    if not vectors:
+        return []
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(_executor(), _search_many_worker, vectors, k)
+    except Exception:
+        return [[] for _ in vectors]
+
+
 def search_vec(vec, k: int = 8) -> list[dict]:
     """用**現成向量**檢索 wiki（心智圖 card 已嵌入的 vec 直接查，免重嵌；同步、純 hnsw）。未就緒回空。"""
     if vec is None:
@@ -188,7 +231,7 @@ async def search(text: str, k: int = 8) -> list[dict]:
         qv = (await clients.embed([text]))[0]
     except Exception:
         return []
-    return search_vec(qv, k=k)
+    return (await search_many([qv], k=k))[0]
 
 
 def ready() -> bool:
@@ -204,9 +247,13 @@ def stats() -> dict:
 
 
 def invalidate() -> None:
-    global _state
+    global _state, _process_pool
     with _lock:
         _state = None
+    with _process_lock:
+        pool, _process_pool = _process_pool, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 if __name__ == "__main__":

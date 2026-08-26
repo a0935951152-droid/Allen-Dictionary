@@ -8,13 +8,13 @@
 ## ✅ 操作凍結已解除（2026-07-03 E2E 驗收通過）
 
 原凍結：A1＋A2 落地前不對 evt_250068/331072 跑 judge/commit（防「還是→海蝕」進全域 regex）。
-**E2E 全鏈驗收結果**（build→mind→ground_context→judge(Gemma 獨佔)→commit→sync）：
+**E2E 全鏈驗收結果**（build→mind→ground_context→judge(Qwen 獨佔)→commit→sync）：
 - 高頻詞 auto 修＝**0**（41 個「還是」全維持）；「還是」滿分變體證據＝0（現 d=0.15/score 0.46/需語境確認）。
 - 判官：268 存疑 → 修 48／維持 219／人工 1；48 個 auto 全為 junk→正解（龍山是→龍山寺、沼井→藻井…）。
-- gold 8 正修 **7/8**（相擁→鄉勇 這輪被 gemma abandon＝召回小退；相擁 freq 0.15 非 common，非 cap 所致）。
+- gold 8 正修 **7/8**（相擁→鄉勇 這輪被 Qwen abandon＝召回小退；相擁 freq 0.15 非 common，非 cap 所致）。
 - sync：regex 38 條乾淨、contextual 0、「食材/還是」皆未入 variants。
 ⚠ **殘留風險（新凍結對象）**：「**食材↔石材**」案例——ASR 正確詞被提名（含調 d=0.0 真同音＋單域語意
-飽和 rule_hit=True），**唯一防線剩 gemma**；jieba freq(食材)=0、wiki 無獨立條目 → A1/A3/A5 守門全罩不到。
+飽和 rule_hit=True），**唯一防線剩 Qwen**；jieba freq(食材)=0、wiki 無獨立條目 → A1/A3/A5 守門全罩不到。
 → 對「真同音（d=0）且原詞成詞」的 span，判官前應加 cap=human（見 A3 升級），落地前 auto 修結果需人掃一遍再 commit。
 
 ---
@@ -34,20 +34,16 @@
 - **登錄變體 verified 必收**（bug 修，天條4）：`phonetic_index.variant_correct`，聲學軸 score=1.0 不受 IPA 門檻（龍山是→龍山寺 IPA 0.67 被誤殺 → 修好；evt_250068 rule_hits 30→44 全是 recovered 變體，無 regression）。
   ⚠ 2026-07-02 審查判定此機制**對通用詞變體過度**（見 A1）——`龍山是` 類不成詞字串正確，`還是` 類高頻詞先驗相反。
 - **語意接 wiki**（規格 §3.2/§5）：anchor = mind(term+variants) ∪ wiki(title+aliases)；`know_index.ground_context` 寫 `seg.ground_context`（相擁→鄉勇 靠 鄉勇團 wiki 救回）。
-- **判官四態**（取代舊粗修 coarse.py + 精修）：`refine.judge_span` gemma `{abandon,xling}` → ①修 ②維持 ③人工 ④—；`dic judge` Gemma 獨佔窗口（`/api/judge_pending` 批次判）。
+- **判官四態**（取代舊粗修 coarse.py + 精修）：`refine.judge_span` Qwen `{abandon,xling}` → ①修 ②維持 ③人工 ④—；`dic judge` Qwen 常駐服務（`/api/judge_pending` 批次判）。
 - **NMK 收斂引擎徹底移除**：刪 7 模組（`converge/route/align/ground/phonetics/diagnose/generate`）、11 端點、config/.env/schema 相關鍵；死碼清除。全文件對齊兩層。煙霧測試（新批次 + 野柳 evt_331072 59chunk）端到端通過。
 
-### 2026-07-03（服務架構收斂：LLM 不常駐 + ops 佇列 + 前端一鍵獨佔窗口）
-- **架構定調**：知識庫+wiki 跑一輪當 DB → **收斂棧常開**（tei-embed/ner/sat/api，唯一 GPU=embed ~2G）→
-  **判官 Gemma 該出動才拉**（獨佔窗口，跑完自動換回）。**Breeze-7B(vllm)/tei-rerank 已淘汰**
-  （判官全走 Gemma；rerank 引擎零呼叫＝NMK 移除後死服務）——compose 定義保留標 ⚠ 僅供回退，`dic up` 不啟動。
-- **bin/dic 重整**：`up`=收斂棧（順手收舊 runtime）、`api`=只重建 api、`logs`、選單分「日常/DB建置/其他」三組；
-  `build`/`judge` 抽共用 `win_open/win_close/run_build/run_judge`；`gpu|full` 移除（擋下提示）。
-- **ops 佇列（前端一鍵開獨佔窗口）**：api 容器無 docker 權限（封閉設計）→ 檔案佇列：前端 POST
-  `/api/ops/{build|judge}` → api 寫 `data/ops/request.json` →（主機）**`dic agent`**（`dic up` 自動背景啟動，
-  心跳 `agent.alive`）認領執行、逐步回寫 `status.json` → 前端輪詢 `/api/ops/status` 畫進度條至 done/error。
-  單工 409；代理未啟動 503。graph.html build 按鈕與 index.html「判官出動」按鈕都走此路（保留「本批直判」小按鈕）。
-- **標籤全改 Gemma**：index.html 徽章 `llm(7B)`→`gemma(窗口)`、CLAUDE.md 服務座標/天條3/修正參數段同步改寫。
+### 2026-08-25（正式切至 Qwen Q2 常駐架構）
+- `qwen + tei-embed + ner + sat + api` 五個核心服務同時常駐；build 與判官共用
+  **Qwen3.8-27B Q2_K_L**（llama.cpp，4 slots × 32K）。
+- 舊 LLM 與 cross-encoder reranker 已從 Compose、環境變數、health、CLI 與前端啟動鏈移除。
+- ops 仍採檔案佇列：`/api/ops/{build|judge}` → 主機 `dic agent` → 常駐 Qwen 直接執行；
+  同類操作單工，其他模型服務不中斷。
+- RTX 3090 Ti 實測：Qwen + bge-m3 同駐約 18.3GiB；四路短請求可同時使用 slot 0–3，無 OOM。
 
 ### 2026-07-03（A 段守門落碼 + 參數接線 + 參數視覺化）〔詳見各待辦項 🔧 註記〕
 - **A2 聲調入距**（含 debug：`_TONES` 集合、分母只算音段）＋ **A1 變體分級**（`engine/lexicon.py` jieba 詞頻）
@@ -57,7 +53,7 @@
 - **⚙ 參數視覺化（唯讀）**：`GET /api/pipeline/params`（五階段×實讀參數×公式＋聲學/心智圖現場統計）；
   前端 index.html 加「⚙ 參數」站（不需選批次）。只顯示不調動；調參仍走 .env → 重啟 api。
 - **判官重擲骰 bug 修**：`judge_ep` targets 排除 `decision.to=='human'`——第④態已進人工佇列的 span
-  重跑 `dic judge`/coarse_fix 不再被 gemma 重判翻案（人工佇列不流失）。
+  重跑 `dic judge`/coarse_fix 不再被 Qwen 重判翻案（人工佇列不流失）。
 
 ### 2026-07-01（偵測側深度 + G2P 派發）〔原待辦 A.1/A.3/A.4，已落碼〕
 - **第三偵測器 `scan_terms`**（`phonetic_index.py:246`）：CAG 正解詞表直掃 chunk（登錄變體簡繁直掃 + 漢字 IPA 鄰域滑窗召回），繞過 ckip 漏抓（生核化石→生痕化石）。`review.review_detect_segment` A 路。
@@ -72,7 +68,7 @@
 
 ### A. 常見詞誤修根因鏈（2026-07-02 結構審查；最高優先）
 
-> 卡點：`還是`/`等等` 類高頻詞被提名滿分、域內句 `rule_hit=True`，唯一防線剩 gemma 單 bit。
+> 卡點：`還是`/`等等` 類高頻詞被提名滿分、域內句 `rule_hit=True`，唯一防線剩 Qwen 單 bit。
 > 審查結論：**清 CAG 髒變體治標無效**（A2 說明原因）；哲學缺口＝候選有接地、**原詞從未被接地**。
 >
 > **分階段（依賴＋交付門檻，詳 [審查.md](審查.md) 執行規劃節）**：
@@ -121,7 +117,7 @@
    ℹ 重啟 api 即生效（IPA 全在 runtime 算；`ipa_index.json` 只寫不讀）；vault frontmatter `ipa:` 標籤重建後會多調號 token（純顯示）。
 
 3. **原詞對稱接地：rule_hit 改 margin 制**〔R3〕
-   原詞在整條管線從未被接地，唯一承擔者是 gemma `abandon` 一個 bit（`refine.py:76`）＝單點故障；
+   原詞在整條管線從未被接地，唯一承擔者是 Qwen `abandon` 一個 bit（`refine.py:76`）＝單點故障；
    一批 23 個同 surface span＝23 次獨立擲骰。
    改：原詞也算一份語意成立度，`rule_hit` 改 margin（候選撐度 − 原詞成立度）；原詞為強客觀詞
    （字典詞/wiki 詞條/高頻）時抬高改字門檻。這是「客觀語意接地」哲學的對稱補全。

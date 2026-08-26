@@ -1,5 +1,5 @@
 """規則證據層（階段①「局部語意語音命中」）：對每個偵測出的可疑詞，產兩條**規則**證據，
-交階段②的 gemma 判官彙整（gemma 另做跨語）。信心＝規則命中 與 gemma 拋棄判斷的一致性。
+交階段②的 Qwen 判官彙整（Qwen 另做跨語）。信心＝規則命中 與 Qwen 拋棄判斷的一致性。
 
 兩條規則線（互不污染、皆零訓練 CPU/離線）：
 - **聲學**：IPA→CAG 音近召回（`phonetic_index.query_scored`）→ 候選 + 距離。**只證明音像，不證明字錯**。
@@ -7,7 +7,7 @@
   用局部句而非整塊 chunk → 擋掉文件主題滲入（「還是」在木構造句裡不會被「海蝕」撐住）。
 
 `rule_hit` ＝ 聲學有候選 **且** 該候選局部語意撐住（≥floor）。命中即「規則有接地」；不命中＝規則沒撐，
-要不要改交 gemma（且只有 gemma 靠跨語救回時才走人工，見 `judge`）。跨語不在此層（gemma 直接讀平行文）。
+要不要改交 Qwen（且只有 Qwen 靠跨語救回時才走人工，見 `judge`）。跨語不在此層（Qwen 直接讀平行文）。
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def semantic_local(cands: list[str], local_vec: list[float], k: int = settings.l
 
 
 def build(surface: str, local_vec: list[float]) -> SpanReports:
-    """組規則證據：聲學候選 + 局部語意撐住者。crosslingual 留空（gemma 讀平行文，不在規則層）。"""
+    """組規則證據：聲學候選 + 局部語意撐住者。crosslingual 留空（Qwen 讀平行文，不在規則層）。"""
     ac = acoustic(surface)
     se = semantic_local([r.candidate for r in ac], local_vec)
     return SpanReports(acoustic=ac, semantic=se)
@@ -104,7 +104,7 @@ def build(surface: str, local_vec: list[float]) -> SpanReports:
 
 def rule_hit(reports: SpanReports) -> tuple[str | None, bool]:
     """規則命中：取「聲學召回 且 局部語意撐住」的最佳候選 → (候選, True)。
-    無語意撐 → 回 (聲學最佳, False)＝有候選但規則沒接地，交 gemma。皆無 → (None, False)。"""
+    無語意撐 → 回 (聲學最佳, False)＝有候選但規則沒接地，交 Qwen。皆無 → (None, False)。"""
     sem = {flatten(r.candidate) for r in reports.semantic if r.score > 0}   # 只認**真撐**（未撐 score=0 不算）
     for r in reports.acoustic:                      # acoustic 已按距離排序，最近的優先
         if flatten(r.candidate) in sem:
@@ -113,5 +113,5 @@ def rule_hit(reports: SpanReports) -> tuple[str | None, bool]:
 
 
 def render_line(items: list[ReportItem]) -> str:
-    """證據 → 給 gemma 的精簡單行。"""
+    """證據 → 給 Qwen 的精簡單行。"""
     return " ".join(f"{it.candidate}({it.evidence})" for it in items) or "（無）"

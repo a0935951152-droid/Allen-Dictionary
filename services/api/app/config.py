@@ -22,10 +22,10 @@ def _i(key: str, default: int) -> int:
 class Settings:
     # ── ① 服務座標 ────────────────────────────────────────────
     data_dir: str = os.getenv("DATA_DIR", "./data")
-    llm_base_url: str = os.getenv("LLM_BASE_URL", "http://vllm:8000/v1")
+    llm_base_url: str = os.getenv("LLM_BASE_URL", "http://qwen:8000/v1")
     llm_model: str = os.getenv("LLM_MODEL", "judge")
+    llm_timeout_seconds: int = _i("LLM_TIMEOUT_SECONDS", 360)  # 12288 tokens @ ~48 tok/s 需約 256 秒
     embed_url: str = os.getenv("EMBED_URL", "http://tei-embed:80")
-    rerank_url: str = os.getenv("RERANK_URL", "http://tei-rerank:80")
     ner_url: str = os.getenv("NER_URL", "http://ner:80")
     sat_url: str = os.getenv("SAT_URL", "http://sat:80")
 
@@ -58,12 +58,10 @@ class Settings:
     wiki_search_k: int = _i("WIKI_SEARCH_K", 8)         # wiki 檢索取數
 
     # ── ⑤ 知識側抽取（影響字典/CAG 內容品質）──────────────────
-    know_chunk_size: int = _i("KNOW_CHUNK_SIZE", 700)   # 文件切 chunk 字數
-    know_whole_chunk: int = _i("KNOW_WHOLE_CHUNK", 1100)  # 整檔模式 chunk 字數
-    know_whole_doc_max: int = _i("KNOW_WHOLE_DOC_MAX", 3000)  # 整檔抽取字數上限
+    know_max_file_chars: int = _i("KNOW_MAX_FILE_CHARS", 6000)  # build 整檔輸入硬上限；超過拒絕、不截斷
+    know_p1_max_tokens: int = _i("KNOW_P1_MAX_TOKENS", 12288)   # Pass1 最大輸出 tokens
+    know_p2_max_tokens: int = _i("KNOW_P2_MAX_TOKENS", 12288)   # Pass2 最大輸出 tokens
     know_gleanings: int = _i("KNOW_GLEANINGS", 1)       # gleaning 補抽趟數
-    know_doc_cap: int = _i("KNOW_DOC_CAP", 40)          # 每檔最多 chunk
-    know_doc_conc: int = _i("KNOW_DOC_CONC", 8)         # 每檔抽取併發
     know_conf_high: float = _f("KNOW_CONF_HIGH", 0.9)   # 對照表「高」信心
     know_conf_mid: float = _f("KNOW_CONF_MID", 0.7)     # 對照表「中」信心
     know_conf_low: float = _f("KNOW_CONF_LOW", 0.5)     # 對照表「低」信心

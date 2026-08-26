@@ -2,8 +2,7 @@
 # 把架構需要、但 /nas-data/allen/models 尚缺的模型一次拉到 NAS（之後 runtime 全離線）。
 # 模型選型對齊姊妹專案 SpeakIn（/nas-data/allen-speakin 的 stages 單元）：
 #   STT      = faster-whisper large-v3-turbo（SpeakIn stt_whisperlive 預設）
-#   TTT/MT   = 重用已在 NAS 的 Breeze-7B W4A16（SpeakIn deploy/dev/vllm_mt.sh 實際載入的就是它，
-#              manifest 的 Qwen2.5 只是預設值）→ 不另下載
+#   LLM      = Qwen3.8-27B Q2_K_L GGUF，固定從 QWEN_MODEL_PATH 載入 → 本腳本不另下載
 #   TTS      = CosyVoice2-0.5B（已在 NAS models/tts/cosyvoice2-0.5b）→ 不另下載
 #   NER      = ckiplab/bert-base-chinese-ner（§3 篩選擋常用詞）
 #   g2pW     = alextomcat/G2PWModel（§3 ①IPA 注音/多音字消歧）
@@ -33,5 +32,5 @@ case "$target" in
   *) echo "未知目標：$target（可用 stt|ner|g2pw|all）"; exit 1 ;;
 esac
 
-echo "✓ 完成。TTT/MT 重用 $MODELS_ROOT/breeze-7b-w4a16-awq；TTS 重用 $MODELS_ROOT/tts/cosyvoice2-0.5b。"
+echo "✓ 完成。LLM 使用既有 Qwen3.8-27B Q2_K_L GGUF；TTS 重用 $MODELS_ROOT/tts/cosyvoice2-0.5b。"
 echo "  離線使用：設 HF_HUB_OFFLINE=1，模型路徑指向 $MODELS_ROOT 下對應目錄。"
